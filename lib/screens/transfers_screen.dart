@@ -26,12 +26,42 @@ class _TransfersScreenState extends State<TransfersScreen> {
   ];
 
   final List<Map<String, dynamic>> _items = [
-    {'name': 'Diesel', 'icon': Icons.local_gas_station, 'unit': 'Liters', 'available': 500},
-    {'name': 'Engine Oil', 'icon': Icons.oil_barrel, 'unit': 'Quarts', 'available': 120},
-    {'name': 'Hydraulic Fluid', 'icon': Icons.water_drop, 'unit': 'Gallons', 'available': 80},
-    {'name': 'Bolts & Nuts', 'icon': Icons.build, 'unit': 'Pieces', 'available': 1000},
-    {'name': 'Grease', 'icon': Icons.cleaning_services, 'unit': 'Tubes', 'available': 50},
-    {'name': 'Coolant', 'icon': Icons.ac_unit, 'unit': 'Liters', 'available': 200},
+    {
+      'name': 'Diesel',
+      'icon': Icons.local_gas_station,
+      'unit': 'Liters',
+      'available': 500
+    },
+    {
+      'name': 'Engine Oil',
+      'icon': Icons.oil_barrel,
+      'unit': 'Quarts',
+      'available': 120
+    },
+    {
+      'name': 'Hydraulic Fluid',
+      'icon': Icons.water_drop,
+      'unit': 'Gallons',
+      'available': 80
+    },
+    {
+      'name': 'Bolts & Nuts',
+      'icon': Icons.build,
+      'unit': 'Pieces',
+      'available': 1000
+    },
+    {
+      'name': 'Grease',
+      'icon': Icons.cleaning_services,
+      'unit': 'Tubes',
+      'available': 50
+    },
+    {
+      'name': 'Coolant',
+      'icon': Icons.ac_unit,
+      'unit': 'Liters',
+      'available': 200
+    },
   ];
 
   @override
@@ -52,7 +82,8 @@ class _TransfersScreenState extends State<TransfersScreen> {
       return;
     }
     if (_fromPoint == _toPoint) {
-      _showSnackbar('Source and destination cannot be the same', AppTheme.danger);
+      _showSnackbar(
+          'Source and destination cannot be the same', AppTheme.danger);
       return;
     }
     if (_selectedItem == null) {
@@ -71,14 +102,17 @@ class _TransfersScreenState extends State<TransfersScreen> {
     }
 
     // Check available stock
-    final selectedItemData = _items.firstWhere((item) => item['name'] == _selectedItem);
+    final selectedItemData =
+        _items.firstWhere((item) => item['name'] == _selectedItem);
     if (quantity > selectedItemData['available']) {
-      _showSnackbar('Insufficient stock! Only ${selectedItemData['available']} ${selectedItemData['unit']} available', AppTheme.danger);
+      _showSnackbar(
+          'Insufficient stock! Only ${selectedItemData['available']} ${selectedItemData['unit']} available',
+          AppTheme.danger);
       return;
     }
 
     setState(() => _isInitiating = true);
-    
+
     // Simulate API call
     Future.delayed(const Duration(seconds: 1), () {
       setState(() => _isInitiating = false);
@@ -172,7 +206,8 @@ class _TransfersScreenState extends State<TransfersScreen> {
             const SizedBox(height: 16),
             const NoteBox(
               title: 'Two-way confirmation',
-              content: 'The transfer flow is a handshake — supervisor initiates, receiver confirms. Both sides must act for stock counts to update on both ends.',
+              content:
+                  'The transfer flow is a handshake — supervisor initiates, receiver confirms. Both sides must act for stock counts to update on both ends.',
             ),
             const SizedBox(height: 16),
           ],
@@ -189,12 +224,15 @@ class _TransfersScreenState extends State<TransfersScreen> {
           height: 56,
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [AppTheme.info.withOpacity(0.15), AppTheme.info.withOpacity(0.05)],
+              colors: [
+                AppTheme.info.withValues(alpha: 0.15),
+                AppTheme.info.withValues(alpha: 0.05)
+              ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: AppTheme.info.withOpacity(0.2)),
+            border: Border.all(color: AppTheme.info.withValues(alpha: 0.2)),
           ),
           alignment: Alignment.center,
           child: const Text('🔄', style: TextStyle(fontSize: 28)),
@@ -206,7 +244,10 @@ class _TransfersScreenState extends State<TransfersScreen> {
             children: [
               Text(
                 'Internal Transfers',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary),
               ),
               SizedBox(height: 4),
               Text(
@@ -225,12 +266,12 @@ class _TransfersScreenState extends State<TransfersScreen> {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppTheme.info.withOpacity(0.1), AppTheme.infoBg],
+          colors: [AppTheme.info.withValues(alpha: 0.1), AppTheme.infoBg],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.info.withOpacity(0.2)),
+        border: Border.all(color: AppTheme.info.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -238,11 +279,12 @@ class _TransfersScreenState extends State<TransfersScreen> {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: AppTheme.info.withOpacity(0.15),
+              color: AppTheme.info.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(12),
             ),
             alignment: Alignment.center,
-            child: const Icon(Icons.info_outline, color: AppTheme.info, size: 22),
+            child:
+                const Icon(Icons.info_outline, color: AppTheme.info, size: 22),
           ),
           const SizedBox(width: 14),
           const Expanded(
@@ -251,7 +293,10 @@ class _TransfersScreenState extends State<TransfersScreen> {
               children: [
                 Text(
                   'Two-Way Handshake Process',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary),
                 ),
                 SizedBox(height: 4),
                 Text(
@@ -289,14 +334,23 @@ class _TransfersScreenState extends State<TransfersScreen> {
                 width: 30,
                 height: 30,
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: [color, color.withOpacity(0.8)]),
+                  gradient:
+                      LinearGradient(colors: [color, color.withValues(alpha: 0.8)]),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 alignment: Alignment.center,
-                child: Text('$step', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                child: Text('$step',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white)),
               ),
               const SizedBox(width: 12),
-              Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary)),
             ],
           ),
           const SizedBox(height: 16),
@@ -315,24 +369,32 @@ class _TransfersScreenState extends State<TransfersScreen> {
             border: Border.all(color: AppTheme.border),
           ),
           child: DropdownButtonFormField<String>(
-            value: _fromPoint,
+            initialValue: _fromPoint,
             hint: const Text('From — source stock point'),
             isExpanded: true,
             decoration: const InputDecoration(
-              prefixIcon: Icon(Icons.arrow_circle_up_outlined, size: 18, color: AppTheme.danger),
+              prefixIcon: Icon(Icons.arrow_circle_up_outlined,
+                  size: 18, color: AppTheme.danger),
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             ),
-            items: _stockPoints.map((point) => DropdownMenuItem(
-              value: point['name'],
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(point['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                  Text(point['location']!, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
-                ],
-              ),
-            )).toList(),
+            items: _stockPoints
+                .map((point) => DropdownMenuItem(
+                      value: point['name'],
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(point['name']!,
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w500)),
+                          Text(point['location']!,
+                              style: const TextStyle(
+                                  fontSize: 10, color: AppTheme.textMuted)),
+                        ],
+                      ),
+                    ))
+                .toList(),
             onChanged: (value) => setState(() => _fromPoint = value),
           ),
         ),
@@ -344,9 +406,10 @@ class _TransfersScreenState extends State<TransfersScreen> {
           decoration: BoxDecoration(
             color: AppTheme.infoBg,
             shape: BoxShape.circle,
-            border: Border.all(color: AppTheme.info.withOpacity(0.3)),
+            border: Border.all(color: AppTheme.info.withValues(alpha: 0.3)),
           ),
-          child: const Icon(Icons.keyboard_double_arrow_down, color: AppTheme.info, size: 22),
+          child: const Icon(Icons.keyboard_double_arrow_down,
+              color: AppTheme.info, size: 22),
         ),
         const SizedBox(height: 16),
         Container(
@@ -355,24 +418,32 @@ class _TransfersScreenState extends State<TransfersScreen> {
             border: Border.all(color: AppTheme.border),
           ),
           child: DropdownButtonFormField<String>(
-            value: _toPoint,
+            initialValue: _toPoint,
             hint: const Text('To — destination stock point'),
             isExpanded: true,
             decoration: const InputDecoration(
-              prefixIcon: Icon(Icons.arrow_circle_down_outlined, size: 18, color: AppTheme.success),
+              prefixIcon: Icon(Icons.arrow_circle_down_outlined,
+                  size: 18, color: AppTheme.success),
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             ),
-            items: _stockPoints.map((point) => DropdownMenuItem(
-              value: point['name'],
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(point['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                  Text(point['location']!, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
-                ],
-              ),
-            )).toList(),
+            items: _stockPoints
+                .map((point) => DropdownMenuItem(
+                      value: point['name'],
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(point['name']!,
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w500)),
+                          Text(point['location']!,
+                              style: const TextStyle(
+                                  fontSize: 10, color: AppTheme.textMuted)),
+                        ],
+                      ),
+                    ))
+                .toList(),
             onChanged: (value) => setState(() => _toPoint = value),
           ),
         ),
@@ -383,7 +454,8 @@ class _TransfersScreenState extends State<TransfersScreen> {
   Widget _buildItemQuantity() {
     final selectedItemData = _items.firstWhere(
       (item) => item['name'] == _selectedItem,
-      orElse: () => {'name': '', 'icon': Icons.help, 'unit': '', 'available': 0},
+      orElse: () =>
+          {'name': '', 'icon': Icons.help, 'unit': '', 'available': 0},
     );
 
     return Column(
@@ -394,16 +466,17 @@ class _TransfersScreenState extends State<TransfersScreen> {
             border: Border.all(color: AppTheme.border),
           ),
           child: DropdownButtonFormField<String>(
-            value: _selectedItem,
+            initialValue: _selectedItem,
             hint: const Text('Select item to transfer'),
             isExpanded: true,
             decoration: const InputDecoration(
               prefixIcon: Icon(Icons.inventory_2_outlined, size: 18),
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             ),
             items: _items.map((item) {
-              return DropdownMenuItem(
+              return DropdownMenuItem<String>(
                 value: item['name'],
                 child: Row(
                   children: [
@@ -413,9 +486,12 @@ class _TransfersScreenState extends State<TransfersScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(item['name'], style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                          Text('${item['available']} ${item['unit']} available', 
-                              style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                          Text(item['name'],
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w500)),
+                          Text('${item['available']} ${item['unit']} available',
+                              style: const TextStyle(
+                                  fontSize: 10, color: AppTheme.textMuted)),
                         ],
                       ),
                     ),
@@ -435,21 +511,28 @@ class _TransfersScreenState extends State<TransfersScreen> {
             labelText: 'Quantity to transfer',
             hintText: 'Enter quantity',
             prefixIcon: const Icon(Icons.numbers, size: 18),
-            suffixText: selectedItemData['unit'] != '' ? selectedItemData['unit'] : null,
+            suffixText: selectedItemData['unit'] != ''
+                ? selectedItemData['unit']
+                : null,
             helperText: _getItemAvailabilityMessage(),
             helperStyle: TextStyle(
-              color: _selectedItem != null && int.tryParse(_quantityController.text) != null &&
-                      int.tryParse(_quantityController.text)! > (selectedItemData['available'] ?? 0)
+              color: _selectedItem != null &&
+                      int.tryParse(_quantityController.text) != null &&
+                      int.tryParse(_quantityController.text)! >
+                          (selectedItemData['available'] ?? 0)
                   ? AppTheme.danger
                   : AppTheme.textMuted,
             ),
-            errorText: _selectedItem != null && _quantityController.text.isNotEmpty &&
-                int.tryParse(_quantityController.text) != null &&
-                int.tryParse(_quantityController.text)! > (selectedItemData['available'] ?? 0)
+            errorText: _selectedItem != null &&
+                    _quantityController.text.isNotEmpty &&
+                    int.tryParse(_quantityController.text) != null &&
+                    int.tryParse(_quantityController.text)! >
+                        (selectedItemData['available'] ?? 0)
                 ? 'Exceeds available stock'
                 : null,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           ),
         ),
         const SizedBox(height: 12),
@@ -461,7 +544,8 @@ class _TransfersScreenState extends State<TransfersScreen> {
             hintText: 'Reason or special instructions...',
             prefixIcon: const Icon(Icons.notes_outlined, size: 18),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           ),
         ),
       ],
@@ -472,29 +556,31 @@ class _TransfersScreenState extends State<TransfersScreen> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           colors: [AppTheme.warningBg, AppTheme.warningBg],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.warning.withOpacity(0.3)),
+        border: Border.all(color: AppTheme.warning.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: AppTheme.warning.withOpacity(0.15),
+              color: AppTheme.warning.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.warning_amber_outlined, color: AppTheme.warning, size: 20),
+            child: const Icon(Icons.warning_amber_outlined,
+                color: AppTheme.warning, size: 20),
           ),
           const SizedBox(width: 14),
           const Expanded(
             child: Text(
               'Stock is immediately deducted from the source point when transfer is initiated. This action cannot be undone.',
-              style: TextStyle(fontSize: 12, color: AppTheme.warning, height: 1.4),
+              style:
+                  TextStyle(fontSize: 12, color: AppTheme.warning, height: 1.4),
             ),
           ),
         ],
@@ -515,7 +601,8 @@ class _TransfersScreenState extends State<TransfersScreen> {
           ),
           child: Row(
             children: [
-              const Icon(Icons.notifications_active_outlined, size: 18, color: AppTheme.info),
+              const Icon(Icons.notifications_active_outlined,
+                  size: 18, color: AppTheme.info),
               const SizedBox(width: 12),
               const Expanded(
                 child: Text(
@@ -529,7 +616,8 @@ class _TransfersScreenState extends State<TransfersScreen> {
                   color: AppTheme.infoBg,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: const Text('Pending', style: TextStyle(fontSize: 10, color: AppTheme.info)),
+                child: const Text('Pending',
+                    style: TextStyle(fontSize: 10, color: AppTheme.info)),
               ),
             ],
           ),
@@ -564,13 +652,14 @@ class _TransfersScreenState extends State<TransfersScreen> {
             decoration: BoxDecoration(
               color: AppTheme.successBg,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.success.withOpacity(0.3)),
+              border: Border.all(color: AppTheme.success.withValues(alpha: 0.3)),
             ),
-            child: Row(
+            child: const Row(
               children: [
-                const Icon(Icons.check_circle_outline, color: AppTheme.success, size: 18),
-                const SizedBox(width: 10),
-                const Expanded(
+                Icon(Icons.check_circle_outline,
+                    color: AppTheme.success, size: 18),
+                SizedBox(width: 10),
+                Expanded(
                   child: Text(
                     'Stock has been updated at the destination point. Transfer completed successfully.',
                     style: TextStyle(fontSize: 12, color: AppTheme.success),
@@ -599,7 +688,8 @@ class _TransfersScreenState extends State<TransfersScreen> {
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
           gradient: isSelected
-              ? LinearGradient(colors: [color.withOpacity(0.15), color.withOpacity(0.05)])
+              ? LinearGradient(
+                  colors: [color.withValues(alpha: 0.15), color.withValues(alpha: 0.05)])
               : null,
           color: isSelected ? null : AppTheme.surface,
           borderRadius: BorderRadius.circular(12),
@@ -612,7 +702,8 @@ class _TransfersScreenState extends State<TransfersScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: isSelected ? color : AppTheme.textMuted, size: 20),
+            Icon(icon,
+                color: isSelected ? color : AppTheme.textMuted, size: 20),
             const SizedBox(width: 8),
             Text(
               label,
@@ -633,41 +724,50 @@ class _TransfersScreenState extends State<TransfersScreen> {
   }
 
   Widget _buildSubmitButton() {
-    final isValid = _fromPoint != null && 
-                    _toPoint != null && 
-                    _selectedItem != null && 
-                    _quantityController.text.isNotEmpty &&
-                    int.tryParse(_quantityController.text) != null &&
-                    int.tryParse(_quantityController.text)! > 0;
-    
+    final isValid = _fromPoint != null &&
+        _toPoint != null &&
+        _selectedItem != null &&
+        _quantityController.text.isNotEmpty &&
+        int.tryParse(_quantityController.text) != null &&
+        int.tryParse(_quantityController.text)! > 0;
+
     final selectedItemData = _items.firstWhere(
       (item) => item['name'] == _selectedItem,
       orElse: () => {'available': 0},
     );
-    
-    final hasStock = _selectedItem == null || 
-                     int.tryParse(_quantityController.text) == null ||
-                     int.tryParse(_quantityController.text)! <= (selectedItemData['available'] ?? 0);
+
+    final hasStock = _selectedItem == null ||
+        int.tryParse(_quantityController.text) == null ||
+        int.tryParse(_quantityController.text)! <=
+            (selectedItemData['available'] ?? 0);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: _isInitiating || !isValid || !hasStock ? null : _initiateTransfer,
+        onPressed:
+            _isInitiating || !isValid || !hasStock ? null : _initiateTransfer,
         style: ElevatedButton.styleFrom(
           backgroundColor: AppTheme.info,
           padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           elevation: 0,
         ),
         child: _isInitiating
-            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-            : Row(
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white))
+            : const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
+                children: [
                   Icon(Icons.send_outlined, size: 20),
                   SizedBox(width: 10),
-                  Text('Initiate Transfer', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                  Text('Initiate Transfer',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                 ],
               ),
       ),

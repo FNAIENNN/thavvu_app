@@ -1,0 +1,1439 @@
+import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
+import 'food_screen.dart';
+
+// ==================== BATCH SHIFT STATE ENUM ====================
+/// Tracks which stage a batch is in for the shift-continuation workflow
+enum BatchShiftState {
+  active,
+  pendingContinuation,
+  fullDayActive,
+  shiftEnded,
+}
+
+// ==================== MODELS ====================
+
+/// Regular worker within the organisation.
+class Worker {
+  final String id;
+  final String name;
+  final String department;
+  String status; // 'active', 'inactive', 'leave', 'closed'
+
+  Worker({
+    required this.id,
+    required this.name,
+    required this.department,
+    this.status = 'active',
+  });
+
+  Worker copyWith({String? status}) {
+    return Worker(
+      id: id,
+      name: name,
+      department: department,
+      status: status ?? this.status,
+    );
+  }
+}
+
+/// Outside worker provided by a supplier.
+class OutsideWorker {
+  final String id;
+  final String name;
+  final String wage;
+  String sessionType; // 'Morning', 'Afternoon', 'Full Day', 'Others'
+  String attendanceStatus; // 'Present', 'Half day', 'Leave', 'Ended'
+  String? supplier;
+  String? photoEntryPath;
+  String? photoExitPath;
+  String? geoLocation;
+  String? afternoonPhotoPath;
+  bool? isAfternoonContinued;
+  bool isOnLeave; // For marking leave during shift
+
+  OutsideWorker({
+    required this.id,
+    required this.name,
+    required this.wage,
+    required this.sessionType,
+    this.attendanceStatus = 'Present',
+    this.supplier,
+    this.photoEntryPath,
+    this.photoExitPath,
+    this.geoLocation,
+    this.afternoonPhotoPath,
+    this.isAfternoonContinued,
+    this.isOnLeave = false,
+  });
+
+  OutsideWorker copyWith({
+    String? wage,
+    String? sessionType,
+    String? attendanceStatus,
+    String? supplier,
+    String? photoEntryPath,
+    String? photoExitPath,
+    String? geoLocation,
+    String? afternoonPhotoPath,
+    bool? isAfternoonContinued,
+    bool? isOnLeave,
+  }) {
+    return OutsideWorker(
+      id: id,
+      name: name,
+      wage: wage ?? this.wage,
+      sessionType: sessionType ?? this.sessionType,
+      attendanceStatus: attendanceStatus ?? this.attendanceStatus,
+      supplier: supplier ?? this.supplier,
+      photoEntryPath: photoEntryPath ?? this.photoEntryPath,
+      photoExitPath: photoExitPath ?? this.photoExitPath,
+      geoLocation: geoLocation ?? this.geoLocation,
+      afternoonPhotoPath: afternoonPhotoPath ?? this.afternoonPhotoPath,
+      isAfternoonContinued: isAfternoonContinued ?? this.isAfternoonContinued,
+      isOnLeave: isOnLeave ?? this.isOnLeave,
+    );
+  }
+}
+
+/// A batch groups outside workers under a supplier and session type.
+class WorkerBatch {
+  final int batchNumber;
+  final String batchId;
+  final String supplier;
+  String sessionType;
+  List<OutsideWorker> workers;
+  String? photoPath;
+  String? geoLocation;
+  final DateTime createdAt;
+
+  // NEW: shift-continuation state
+  BatchShiftState shiftState;
+  String? continuationPhotoPath;
+  String? endShiftPhotoPath;
+  String? endShiftGeoLocation;
+
+  WorkerBatch({
+    required this.batchNumber,
+    required this.batchId,
+    required this.supplier,
+    required this.sessionType,
+    required this.workers,
+    this.photoPath,
+    this.geoLocation,
+    required this.createdAt,
+    this.shiftState = BatchShiftState.active,
+    this.continuationPhotoPath,
+    this.endShiftPhotoPath,
+    this.endShiftGeoLocation,
+  });
+}
+
+/// Machine worker group used in the food summary.
+class MachineWorkerGroup {
+  final String machineId;
+  final String machineName;
+  final int workerCount;
+
+  MachineWorkerGroup({
+    required this.machineId,
+    required this.machineName,
+    required this.workerCount,
+  });
+}
+
+/// Helpers for navigation to food screen.
+class WorkerFood {
+  final String id;
+  final String name;
+  final String status;
+
+  WorkerFood({required this.id, required this.name, required this.status});
+}
+
+class OutsideWorkerFood {
+  final String id;
+  final String name;
+  final String status;
+
+  OutsideWorkerFood({required this.id, required this.name, required this.status});
+}
+
+// ==================== MAIN ATTENDANCE SCREEN ====================
+
+/// Entry point widget for the attendance management feature.
+class AttendanceScreen extends StatefulWidget {
+  const AttendanceScreen({super.key});
+
+  @override
+  State<AttendanceScreen> createState() => _AttendanceScreenState();
+}
+
+class _AttendanceScreenState extends State<AttendanceScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
+  late List<Worker> _workers;
+  late List<OutsideWorker> _outsideWorkers;
+  List<WorkerBatch> _confirmedBatches = [];
+  List<MachineWorkerGroup> _machineWorkerGroups = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+
+    _workers = [
+      Worker(id: 'ATT-001', name: 'John Doe', department: 'Operations', status: 'active'),
+      Worker(id: 'ATT-002', name: 'Jane Smith', department: 'Maintenance', status: 'active'),
+      Worker(id: 'ATT-003', name: 'Robert Johnson', department: 'Logistics', status: 'inactive'),
+      Worker(id: 'ATT-004', name: 'Maria Garcia', department: 'Quality', status: 'active'),
+      Worker(id: 'ATT-005', name: 'David Wilson', department: 'Operations', status: 'leave'),
+      Worker(id: 'ATT-006', name: 'Sarah Brown', department: 'Maintenance', status: 'closed'),
+    ];
+
+    _outsideWorkers = [];
+
+    _machineWorkerGroups = [
+      MachineWorkerGroup(machineId: 'MCH-001', machineName: 'Excavator', workerCount: 2),
+      MachineWorkerGroup(machineId: 'MCH-002', machineName: 'Loader', workerCount: 1),
+    ];
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  void _updateWorkerStatus(String workerId, String newStatus) {
+    setState(() {
+      final index = _workers.indexWhere((w) => w.id == workerId);
+      if (index != -1) _workers[index] = _workers[index].copyWith(status: newStatus);
+    });
+    _showSnackbar('Worker status updated to $newStatus', AppTheme.success);
+  }
+
+  void _updateOutsideWorkerStatus(String workerId, String newStatus) {
+    setState(() {
+      final index = _outsideWorkers.indexWhere((w) => w.id == workerId);
+      if (index != -1) {
+        _outsideWorkers[index] = _outsideWorkers[index].copyWith(attendanceStatus: newStatus);
+      }
+    });
+    _showSnackbar('Outside worker status updated to $newStatus', AppTheme.success);
+  }
+
+  void _addOutsideWorkers(List<OutsideWorker> newWorkers, WorkerBatch batch) {
+    setState(() {
+      _outsideWorkers.addAll(newWorkers);
+      _confirmedBatches.add(batch);
+    });
+  }
+
+  void _refreshBatches() => setState(() {});
+
+  List<Worker> get _foodEligibleRegularWorkers =>
+      _workers.where((w) => w.status == 'active' || w.status == 'inactive').toList();
+
+  List<OutsideWorker> get _foodEligibleOutsideWorkers => _outsideWorkers
+      .where((w) => w.attendanceStatus == 'Present' || w.attendanceStatus == 'Half day')
+      .toList();
+
+  int get _totalFoodCount {
+    int count = _foodEligibleRegularWorkers.length;
+    count += _foodEligibleOutsideWorkers.length;
+    for (var group in _machineWorkerGroups) count += group.workerCount;
+    return count;
+  }
+
+  void _showSnackbar(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  void _navigateToFoodScreen() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FoodScreen(
+          activeInactiveWorkers: _foodEligibleRegularWorkers
+              .map((w) => WorkerFood(id: w.id, name: w.name, status: w.status))
+              .toList(),
+          machineWorkerGroups: _machineWorkerGroups,
+          outsideWorkerCount: _foodEligibleOutsideWorkers.length,
+          outsideWorkers: _foodEligibleOutsideWorkers
+              .map((w) => OutsideWorkerFood(id: w.id, name: w.name, status: w.attendanceStatus))
+              .toList(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppTheme.surface,
+      appBar: AppBar(
+        title: const Text('Attendance'),
+        backgroundColor: AppTheme.primary,
+        foregroundColor: Colors.white,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        bottom: TabBar(
+          controller: _tabController,
+          labelColor: AppTheme.primary,
+          unselectedLabelColor: AppTheme.textSecondary,
+          indicatorColor: AppTheme.primary,
+          indicatorWeight: 2.5,
+          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          tabs: const [
+            Tab(text: 'Mark Attendance', icon: Icon(Icons.edit_calendar)),
+            Tab(text: 'Outside Workers', icon: Icon(Icons.people_outline)),
+            Tab(text: 'Workers & Food', icon: Icon(Icons.manage_accounts)),
+          ],
+        ),
+      ),
+      body: Column(
+        children: [
+          _buildHeader(),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                SingleChildScrollView(
+                  child: RegularWorkersTab(
+                    workers: _workers.where((w) => w.status != 'closed').toList(),
+                    onWorkerStatusChanged: _updateWorkerStatus,
+                  ),
+                ),
+                SingleChildScrollView(
+                  child: OutsideWorkersTab(
+                    outsideWorkers: _outsideWorkers,
+                    confirmedBatches: _confirmedBatches,
+                    onAddWorkers: _addOutsideWorkers,
+                    onStatusChanged: _updateOutsideWorkerStatus,
+                    onBatchesChanged: _refreshBatches,
+                  ),
+                ),
+                SingleChildScrollView(
+                  child: WorkersManagementTab(
+                    activeWorkers: _workers.where((w) => w.status == 'active').toList(),
+                    inactiveWorkers: _workers.where((w) => w.status == 'inactive').toList(),
+                    leaveWorkers: _workers.where((w) => w.status == 'leave').toList(),
+                    closedWorkers: _workers.where((w) => w.status == 'closed').toList(),
+                    outsideWorkersPresent: _foodEligibleOutsideWorkers,
+                    outsideWorkersAbsent: _outsideWorkers
+                        .where((w) =>
+                            w.attendanceStatus != 'Present' &&
+                            w.attendanceStatus != 'Half day')
+                        .toList(),
+                    machineWorkerGroups: _machineWorkerGroups,
+                    totalFoodCount: _totalFoodCount,
+                    onStatusChanged: _updateWorkerStatus,
+                    onOutsideStatusChanged: _updateOutsideWorkerStatus,
+                    onSubmit: _navigateToFoodScreen,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _buildGlobalSubmitBar(),
+        ],
+      ),
+    );
+  }
+
+  // ==================== GLOBAL SUBMIT BAR ====================
+  Widget _buildGlobalSubmitBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        border: Border(top: BorderSide(color: AppTheme.border)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 12,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${_confirmedBatches.length} Batch(es) • ${_confirmedBatches.fold<int>(0, (s, b) => s + b.workers.length)} Workers',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    'Food count: $_totalFoodCount meals',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            ElevatedButton.icon(
+              onPressed: () => _showSnackbar('✅ Reports submitted successfully!', AppTheme.success),
+              icon: const Icon(Icons.send_rounded, size: 20),
+              label: const Text('Submit to HOD',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                elevation: 0,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==================== HEADER ====================
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [AppTheme.primary, AppTheme.accent],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                alignment: Alignment.center,
+                child: const Text('🪪', style: TextStyle(fontSize: 26)),
+              ),
+              const SizedBox(width: 16),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Attendance Management',
+                        style: TextStyle(fontSize: 13, color: Colors.white70)),
+                    SizedBox(height: 4),
+                    Text('Mark & Manage Attendance',
+                        style: TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text('Today',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildStatsRow(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatsRow() {
+    return Row(
+      children: [
+        _buildStatCard('Present', '24', AppTheme.success, Icons.check_circle),
+        const SizedBox(width: 12),
+        _buildStatCard('Absent', '3', AppTheme.danger, Icons.cancel),
+        const SizedBox(width: 12),
+        _buildStatCard('Late', '5', AppTheme.warning, Icons.access_time),
+        const SizedBox(width: 12),
+        _buildStatCard('Leave', '2', AppTheme.info, Icons.beach_access),
+      ],
+    );
+  }
+
+  Widget _buildStatCard(String label, String count, Color color, IconData icon) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: Colors.white, size: 18),
+            const SizedBox(height: 4),
+            Text(count,
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+            Text(label, style: const TextStyle(fontSize: 10, color: Colors.white70)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==================== TAB 1: REGULAR WORKERS ====================
+
+class RegularWorkersTab extends StatelessWidget {
+  final List<Worker> workers;
+  final Function(String, String) onWorkerStatusChanged;
+
+  const RegularWorkersTab({
+    super.key,
+    required this.workers,
+    required this.onWorkerStatusChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Regular Workers',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 12),
+          ...workers.map((w) => _buildWorkerTile(context, w)).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkerTile(BuildContext context, Worker w) {
+    Color statusColor;
+    switch (w.status) {
+      case 'active':
+        statusColor = AppTheme.success;
+        break;
+      case 'inactive':
+        statusColor = AppTheme.warning;
+        break;
+      case 'leave':
+        statusColor = AppTheme.info;
+        break;
+      case 'closed':
+        statusColor = AppTheme.danger;
+        break;
+      default:
+        statusColor = AppTheme.primary;
+    }
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: statusColor.withOpacity(0.2),
+          child: Text(w.name.substring(0, 1),
+              style: TextStyle(color: statusColor, fontWeight: FontWeight.bold)),
+        ),
+        title: Text(w.name,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        subtitle: Text(w.department,
+            style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+        trailing: DropdownButton<String>(
+          value: w.status,
+          underline: const SizedBox.shrink(),
+          items: const [
+            DropdownMenuItem(value: 'active', child: Text('Active')),
+            DropdownMenuItem(value: 'inactive', child: Text('Inactive')),
+            DropdownMenuItem(value: 'leave', child: Text('Leave')),
+            DropdownMenuItem(value: 'closed', child: Text('Closed')),
+          ],
+          onChanged: (v) {
+            if (v != null) onWorkerStatusChanged(w.id, v);
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// ==================== TAB 2: OUTSIDE WORKERS ====================
+
+class OutsideWorkersTab extends StatefulWidget {
+  final List<OutsideWorker> outsideWorkers;
+  final List<WorkerBatch> confirmedBatches;
+  final Function(List<OutsideWorker>, WorkerBatch) onAddWorkers;
+  final Function(String, String) onStatusChanged;
+  final VoidCallback onBatchesChanged;
+
+  const OutsideWorkersTab({
+    super.key,
+    required this.outsideWorkers,
+    required this.confirmedBatches,
+    required this.onAddWorkers,
+    required this.onStatusChanged,
+    required this.onBatchesChanged,
+  });
+
+  @override
+  State<OutsideWorkersTab> createState() => _OutsideWorkersTabState();
+}
+
+class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
+  final List<String> _supplierList = [
+    'ABC Suppliers',
+    'XYZ Contractors',
+    'Global Manpower',
+    'Local Labour Services',
+    'Quick Staffing',
+  ];
+  String? _selectedSupplier;
+  final TextEditingController _customSupplierController = TextEditingController();
+  bool _isCustomSupplier = false;
+
+  String _selectedSessionType = 'Full Day';
+  final TextEditingController _countController = TextEditingController();
+
+  final TextEditingController _morningWageController =
+      TextEditingController(text: '300');
+  final TextEditingController _afternoonWageController =
+      TextEditingController(text: '300');
+  final TextEditingController _fullDayWageController =
+      TextEditingController(text: '500');
+  final TextEditingController _othersWageController =
+      TextEditingController(text: '400');
+
+  bool _photoCaptured = false;
+  String? _photoPath;
+  String? _geoLocation;
+
+  List<OutsideWorker> _pendingBatchWorkers = [];
+  int _nextBatchNumber = 1;
+
+  String _getFinalSupplier() {
+    if (_isCustomSupplier) return _customSupplierController.text.trim();
+    return _selectedSupplier ?? '';
+  }
+
+  double _getWageForSession(String sessionType) {
+    switch (sessionType) {
+      case 'Morning':
+        return double.tryParse(_morningWageController.text) ?? 0;
+      case 'Afternoon':
+        return double.tryParse(_afternoonWageController.text) ?? 0;
+      case 'Full Day':
+        return double.tryParse(_fullDayWageController.text) ?? 0;
+      default:
+        return double.tryParse(_othersWageController.text) ?? 0;
+    }
+  }
+
+  Color _sessionColor(String session) {
+    switch (session) {
+      case 'Morning':
+        return AppTheme.warning;
+      case 'Afternoon':
+        return AppTheme.accent;
+      case 'Full Day':
+        return AppTheme.success;
+      default:
+        return AppTheme.info;
+    }
+  }
+
+  IconData _sessionIcon(String session) {
+    switch (session) {
+      case 'Morning':
+        return Icons.wb_sunny_outlined;
+      case 'Afternoon':
+        return Icons.wb_cloudy_outlined;
+      case 'Full Day':
+        return Icons.light_mode;
+      default:
+        return Icons.schedule;
+    }
+  }
+
+  void _capturePhotoWithGeo() {
+    setState(() {
+      _photoCaptured = true;
+      _photoPath = 'captured_photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      _geoLocation = '17.3850° N, 78.4867° E';
+    });
+    _showSnackbar('Photo captured with geo-tag: $_geoLocation', AppTheme.success);
+  }
+
+  void _generatePendingWorkers() {
+    final supplier = _getFinalSupplier();
+    if (supplier.isEmpty) {
+      _showSnackbar('Please select or enter supplier name', AppTheme.danger);
+      return;
+    }
+    final count = int.tryParse(_countController.text.trim());
+    if (count == null || count <= 0) {
+      _showSnackbar('Enter a valid worker count', AppTheme.danger);
+      return;
+    }
+    final wage = _getWageForSession(_selectedSessionType);
+    if (wage <= 0) {
+      _showSnackbar('Please enter a valid wage', AppTheme.danger);
+      return;
+    }
+    if (!_photoCaptured) {
+      _showSnackbar('Please capture a photo with geo-location', AppTheme.warning);
+      return;
+    }
+    setState(() {
+      final newWorkers = List.generate(count, (index) {
+        return OutsideWorker(
+          id: 'OW-${DateTime.now().millisecondsSinceEpoch}-$index',
+          name: 'Worker ${_pendingBatchWorkers.length + index + 1}',
+          wage: wage.toStringAsFixed(0),
+          sessionType: _selectedSessionType,
+          attendanceStatus: 'Present',
+          supplier: supplier,
+          photoEntryPath: _photoPath,
+          geoLocation: _geoLocation,
+        );
+      });
+      _pendingBatchWorkers.addAll(newWorkers);
+    });
+    _showSnackbar(
+        '$count workers added to pending batch ($_selectedSessionType)',
+        AppTheme.success);
+  }
+
+  void _confirmAndAddBatch() {
+    if (_pendingBatchWorkers.isEmpty) {
+      _showSnackbar('No workers to confirm', AppTheme.danger);
+      return;
+    }
+    final sessionGroups = <String, List<OutsideWorker>>{};
+    for (var w in _pendingBatchWorkers) {
+      sessionGroups.putIfAbsent(w.sessionType, () => []).add(w);
+    }
+    final batchesToAdd = <WorkerBatch>[];
+    for (final entry in sessionGroups.entries) {
+      batchesToAdd.add(WorkerBatch(
+        batchNumber: _nextBatchNumber++,
+        batchId: 'BATCH-${DateTime.now().millisecondsSinceEpoch}-${entry.key}',
+        supplier: _getFinalSupplier(),
+        sessionType: entry.key,
+        workers: List.from(entry.value),
+        photoPath: entry.value.first.photoEntryPath,
+        geoLocation: entry.value.first.geoLocation,
+        createdAt: DateTime.now(),
+      ));
+    }
+    for (final batch in batchesToAdd) {
+      widget.onAddWorkers(batch.workers, batch);
+    }
+    setState(() {
+      _pendingBatchWorkers.clear();
+      _selectedSupplier = null;
+      _isCustomSupplier = false;
+      _customSupplierController.clear();
+      _countController.clear();
+      _photoCaptured = false;
+      _photoPath = null;
+      _geoLocation = null;
+    });
+    _showSnackbar('${batchesToAdd.length} batch(es) confirmed & added!',
+        AppTheme.success);
+  }
+
+  void _showSnackbar(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _customSupplierController.dispose();
+    _countController.dispose();
+    _morningWageController.dispose();
+    _afternoonWageController.dispose();
+    _fullDayWageController.dispose();
+    _othersWageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildAddWorkersForm(),
+          const SizedBox(height: 24),
+          if (_pendingBatchWorkers.isNotEmpty) ...[
+            _buildPendingBatchPreview(),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _confirmAndAddBatch,
+                icon: const Icon(Icons.group_add),
+                label: const Text('Confirm & Add Batch to List'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+          if (widget.confirmedBatches.isNotEmpty)
+            _buildConfirmedBatchesBySession(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAddWorkersForm() {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.group_add, color: AppTheme.primary),
+                const SizedBox(width: 10),
+                const Text('Add Outside Workers',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              value: _isCustomSupplier ? 'Other...' : _selectedSupplier,
+              decoration: const InputDecoration(labelText: 'Supplier'),
+              items: [
+                ..._supplierList
+                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                    .toList(),
+                const DropdownMenuItem(value: 'Other...', child: Text('Other...')),
+              ],
+              onChanged: (val) {
+                setState(() {
+                  if (val == 'Other...') {
+                    _isCustomSupplier = true;
+                    _selectedSupplier = null;
+                  } else {
+                    _isCustomSupplier = false;
+                    _selectedSupplier = val;
+                  }
+                });
+              },
+            ),
+            if (_isCustomSupplier) ...[
+              const SizedBox(height: 8),
+              TextField(
+                controller: _customSupplierController,
+                decoration:
+                    const InputDecoration(labelText: 'Enter supplier name'),
+              ),
+            ],
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _selectedSessionType,
+              decoration: const InputDecoration(labelText: 'Session'),
+              items: const [
+                DropdownMenuItem(value: 'Morning', child: Text('Morning')),
+                DropdownMenuItem(value: 'Afternoon', child: Text('Afternoon')),
+                DropdownMenuItem(
+                    value: 'Full Day', child: Text('Full Day')),
+                DropdownMenuItem(value: 'Others', child: Text('Others')),
+              ],
+              onChanged: (val) {
+                setState(() {
+                  _selectedSessionType = val ?? 'Full Day';
+                });
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: () {
+                switch (_selectedSessionType) {
+                  case 'Morning':
+                    return _morningWageController;
+                  case 'Afternoon':
+                    return _afternoonWageController;
+                  case 'Full Day':
+                    return _fullDayWageController;
+                  default:
+                    return _othersWageController;
+                }
+              }(),
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Wage (₹)',
+                prefixIcon: Icon(Icons.currency_rupee_rounded),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _countController,
+              keyboardType: TextInputType.number,
+              decoration:
+                  const InputDecoration(labelText: 'Number of workers'),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    height: 80,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.03),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: _photoCaptured
+                              ? AppTheme.success
+                              : AppTheme.border,
+                          width: 2),
+                    ),
+                    alignment: Alignment.center,
+                    child: _photoCaptured
+                        ? const Icon(Icons.check_circle,
+                            color: AppTheme.success, size: 32)
+                        : const Text('No photo',
+                            style:
+                                TextStyle(color: AppTheme.textMuted)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ElevatedButton.icon(
+                  onPressed: _capturePhotoWithGeo,
+                  icon: const Icon(Icons.camera_alt),
+                  label: const Text('Capture Photo'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.info,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _generatePendingWorkers,
+                icon: const Icon(Icons.add),
+                label: const Text('Add to Pending'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPendingBatchPreview() {
+    final Map<String, List<OutsideWorker>> grouped = {};
+    for (var w in _pendingBatchWorkers) {
+      grouped.putIfAbsent(w.sessionType, () => []).add(w);
+    }
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.schedule_send_outlined,
+                    color: AppTheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                    'Pending Batch (${_pendingBatchWorkers.length} workers)',
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...grouped.entries.map((entry) {
+              final session = entry.key;
+              final workers = entry.value;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ...workers.map((w) => ListTile(
+                        leading: Icon(_sessionIcon(session),
+                            color: _sessionColor(session), size: 18),
+                        title: Text(w.name),
+                        subtitle: Text(
+                            '${w.sessionType} • ₹${w.wage}/day • ${w.attendanceStatus}'),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.remove_circle_outline,
+                              color: AppTheme.danger, size: 20),
+                          onPressed: () {
+                            setState(() {
+                              _pendingBatchWorkers.remove(w);
+                            });
+                          },
+                        ),
+                      )),
+                ],
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConfirmedBatchesBySession() {
+    final sessions = ['Morning', 'Afternoon', 'Full Day', 'Others'];
+    final Map<String, List<WorkerBatch>> batchBySession = {
+      for (var s in sessions) s: [],
+    };
+    for (var batch in widget.confirmedBatches) {
+      if (batchBySession.containsKey(batch.sessionType)) {
+        batchBySession[batch.sessionType]!.add(batch);
+      } else {
+        batchBySession['Others']!.add(batch);
+      }
+    }
+    final activeSessions =
+        sessions.where((s) => batchBySession[s]!.isNotEmpty).toList();
+    if (activeSessions.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Today's Confirmed Batches",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        ...activeSessions.map((session) {
+          final batches = batchBySession[session]!;
+          final color = _sessionColor(session);
+          return _buildBatchCard(session, batches, color);
+        }),
+      ],
+    );
+  }
+
+  Widget _buildBatchCard(
+      String session, List<WorkerBatch> batches, Color color) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(_sessionIcon(session), color: color, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('$session Session',
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: color)),
+                      Text(
+                          '${batches.length} batch${batches.length > 1 ? 'es' : ''} • ${batches.fold<int>(0, (sum, b) => sum + b.workers.length)} workers',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: color.withValues(alpha: 0.7))),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==================== TAB 3: WORKERS MANAGEMENT & FOOD ====================
+
+class WorkersManagementTab extends StatelessWidget {
+  final List<Worker> activeWorkers;
+  final List<Worker> inactiveWorkers;
+  final List<Worker> leaveWorkers;
+  final List<Worker> closedWorkers;
+  final List<OutsideWorker> outsideWorkersPresent;
+  final List<OutsideWorker> outsideWorkersAbsent;
+  final List<MachineWorkerGroup> machineWorkerGroups;
+  final int totalFoodCount;
+  final Function(String, String) onStatusChanged;
+  final Function(String, String) onOutsideStatusChanged;
+  final VoidCallback onSubmit;
+
+  const WorkersManagementTab({
+    super.key,
+    required this.activeWorkers,
+    required this.inactiveWorkers,
+    required this.leaveWorkers,
+    required this.closedWorkers,
+    required this.outsideWorkersPresent,
+    required this.outsideWorkersAbsent,
+    required this.machineWorkerGroups,
+    required this.totalFoodCount,
+    required this.onStatusChanged,
+    required this.onOutsideStatusChanged,
+    required this.onSubmit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildFoodSummaryCard(),
+          const SizedBox(height: 20),
+          if (activeWorkers.isNotEmpty)
+            _buildWorkerCard('Active Workers (Food)', activeWorkers,
+                Icons.check_circle, AppTheme.success),
+          if (inactiveWorkers.isNotEmpty)
+            _buildWorkerCard('Inactive / Absent Workers (Food)', inactiveWorkers,
+                Icons.cancel, AppTheme.warning),
+          if (outsideWorkersPresent.isNotEmpty)
+            _buildOutsideWorkerCard('Outside Workers Present/Half day (Food)',
+                outsideWorkersPresent, Icons.people, AppTheme.primary),
+          if (machineWorkerGroups.isNotEmpty)
+            _buildMachineWorkerCard(machineWorkerGroups),
+          if (outsideWorkersAbsent.isNotEmpty)
+            _buildOutsideWorkerCard('Outside Workers Absent (No Food)',
+                outsideWorkersAbsent, Icons.person_off, AppTheme.danger),
+          if (leaveWorkers.isNotEmpty)
+            _buildWorkerCard('Regular Workers on Leave (No Food)', leaveWorkers,
+                Icons.beach_access, AppTheme.info),
+          if (closedWorkers.isNotEmpty)
+            _buildWorkerCard('Closed Workers (No Food)', closedWorkers,
+                Icons.block, AppTheme.danger),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: onSubmit,
+              icon: const Icon(Icons.send, size: 20),
+              label: const Text('Finalize Food L ist & Send to Canteen',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFoodSummaryCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.infoBg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.info.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppTheme.info.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child:
+                const Icon(Icons.restaurant, color: AppTheme.info, size: 28),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Food Preparation',
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
+                Text('Total meals to prepare: $totalFoodCount',
+                    style: const TextStyle(
+                        fontSize: 13, color: AppTheme.textSecondary)),
+                const Text(
+                    '(Regular Active/Inactive + Outside Present/Half day + Machine Workers)',
+                    style: TextStyle(
+                        fontSize: 11, color: AppTheme.textMuted)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkerCard(String title, List<Worker> workers, IconData icon,
+      Color color) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 20, color: color),
+                const SizedBox(width: 10),
+                Text(title,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: color)),
+                const Spacer(),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('${workers.length}',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: color)),
+                ),
+              ],
+            ),
+          ),
+          ...workers.map((w) => _buildWorkerTile(w, color)).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkerTile(Worker w, Color color) {
+    return ListTile(
+      title: Text(w.name,
+          style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textPrimary)),
+      subtitle: Text(w.department,
+          style: const TextStyle(
+              fontSize: 11, color: AppTheme.textSecondary)),
+      trailing: DropdownButton<String>(
+        value: w.status,
+        underline: const SizedBox.shrink(),
+        items: const [
+          DropdownMenuItem(value: 'active', child: Text('Active')),
+          DropdownMenuItem(value: 'inactive', child: Text('Inactive')),
+          DropdownMenuItem(value: 'leave', child: Text('Leave')),
+          DropdownMenuItem(value: 'closed', child: Text('Closed')),
+        ],
+        onChanged: (v) {
+          if (v != null) onStatusChanged(w.id, v);
+        },
+      ),
+    );
+  }
+
+  Widget _buildOutsideWorkerCard(String title, List<OutsideWorker> workers,
+      IconData icon, Color color) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 20, color: color),
+                const SizedBox(width: 10),
+                Text(title,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: color)),
+                const Spacer(),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('${workers.length}',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: color)),
+                ),
+              ],
+            ),
+          ),
+          ...workers.map((w) => _buildOutsideWorkerTile(w, color)).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOutsideWorkerTile(OutsideWorker w, Color color) {
+    return ListTile(
+      title: Text(w.name,
+          style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textPrimary)),
+      subtitle: Text('${w.sessionType} • ${w.attendanceStatus}',
+          style: const TextStyle(
+              fontSize: 11, color: AppTheme.textSecondary)),
+      trailing: DropdownButton<String>(
+        value: w.attendanceStatus,
+        underline: const SizedBox.shrink(),
+        items: const [
+          DropdownMenuItem(value: 'Present', child: Text('Present')),
+          DropdownMenuItem(value: 'Half day', child: Text('Half day')),
+          DropdownMenuItem(value: 'Leave', child: Text('Leave')),
+          DropdownMenuItem(value: 'Ended', child: Text('Ended')),
+        ],
+        onChanged: (v) {
+          if (v != null) onOutsideStatusChanged(w.id, v);
+        },
+      ),
+    );
+  }
+
+  Widget _buildMachineWorkerCard(List<MachineWorkerGroup> groups) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.construction, size: 20, color: AppTheme.primary),
+              const SizedBox(width: 10),
+              const Text('Machine Workers',
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.primary)),
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                    '${groups.fold<int>(0, (s, g) => s + g.workerCount)}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primary)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...groups.map((g) => ListTile(
+                leading: const Icon(Icons.settings,
+                    size: 18, color: AppTheme.primary),
+                title: Text(g.machineName),
+                trailing: Text('${g.workerCount} workers'),
+              )),
+        ],
+      ),
+    );
+  }
+}

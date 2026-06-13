@@ -2,254 +2,58 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
 
-// ─── INTERNAL TRANSFERS ──────────────────────────────────────────────────────
-class TransfersScreen extends StatefulWidget {
-  const TransfersScreen({super.key});
+// ─── Model ────────────────────────────────────────────────────────────────────
+class PetrolEntry {
+  final String id;
+  final String bikeId;
+  final String date;
+  final double quantity;
+  final double amount;
+  final String paymentMode;
+  final String notes;
 
-  @override
-  State<TransfersScreen> createState() => _TransfersScreenState();
+  const PetrolEntry({
+    required this.id,
+    required this.bikeId,
+    required this.date,
+    required this.quantity,
+    required this.amount,
+    required this.paymentMode,
+    this.notes = '',
+  });
 }
 
-class _TransfersScreenState extends State<TransfersScreen> {
-  String _transferStatus = '';
+class SnackEntry {
+  final String id;
+  final String broughtBy;
+  final String forWhom;
+  final String items;
+  final double cost;
+  final String paymentMode;
+  final String date;
 
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const ModuleHeader(
-            title: 'Internal Transfers',
-            subtitle: 'Move stock between stock points with receiver confirmation',
-            emoji: '🔄',
-            color: AppTheme.info,
-          ),
-          const SizedBox(height: 20),
-
-          _TransferCard(
-            step: 1,
-            title: 'Source & Destination',
-            child: Column(
-              children: [
-                DropdownButtonFormField<String>(
-                  hint: const Text('From stock point', style: TextStyle(fontSize: 13, color: AppTheme.textMuted)),
-                  decoration: _dropdownDecoration(Icons.arrow_circle_up_outlined, AppTheme.danger),
-                  items: const [
-                    DropdownMenuItem(value: 'a', child: Text('Site A - North', style: TextStyle(fontSize: 13))),
-                    DropdownMenuItem(value: 'b', child: Text('Warehouse Main', style: TextStyle(fontSize: 13))),
-                  ],
-                  onChanged: (_) {},
-                ),
-                const SizedBox(height: 12),
-                const Center(
-                  child: Icon(Icons.keyboard_double_arrow_down, color: AppTheme.textMuted, size: 28),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  hint: const Text('To stock point', style: TextStyle(fontSize: 13, color: AppTheme.textMuted)),
-                  decoration: _dropdownDecoration(Icons.arrow_circle_down_outlined, AppTheme.success),
-                  items: const [
-                    DropdownMenuItem(value: 'b', child: Text('Site B - South', style: TextStyle(fontSize: 13))),
-                    DropdownMenuItem(value: 'c', child: Text('Field Store', style: TextStyle(fontSize: 13))),
-                  ],
-                  onChanged: (_) {},
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          _TransferCard(
-            step: 2,
-            title: 'Item & Quantity',
-            child: Column(
-              children: [
-                DropdownButtonFormField<String>(
-                  hint: const Text('Select item to transfer', style: TextStyle(fontSize: 13, color: AppTheme.textMuted)),
-                  decoration: _dropdownDecoration(Icons.inventory_2_outlined, AppTheme.warning),
-                  items: const [
-                    DropdownMenuItem(value: 'diesel', child: Text('Diesel', style: TextStyle(fontSize: 13))),
-                    DropdownMenuItem(value: 'oil', child: Text('Engine Oil', style: TextStyle(fontSize: 13))),
-                  ],
-                  onChanged: (_) {},
-                ),
-                const SizedBox(height: 10),
-                const AppFormField(label: 'Quantity to transfer', icon: Icons.numbers, keyboardType: TextInputType.number),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          _TransferCard(
-            step: 3,
-            title: 'Initiate Transfer',
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppTheme.warningBg,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppTheme.warning.withOpacity(0.3)),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.warning_amber_outlined, color: AppTheme.warning, size: 18),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Stock is immediately deducted from source when transfer is initiated.',
-                      style: TextStyle(fontSize: 12, color: AppTheme.warning, height: 1.4),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          _TransferCard(
-            step: 4,
-            title: 'Receiver Acknowledgment',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'The destination stock point receives a pop-up notification to confirm receipt.',
-                  style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.5),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatusBubble(
-                        label: 'Received',
-                        icon: Icons.check_circle_outline,
-                        color: AppTheme.success,
-                        selected: _transferStatus == 'Received',
-                        onTap: () => setState(() => _transferStatus = 'Received'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _StatusBubble(
-                        label: 'Pending',
-                        icon: Icons.hourglass_empty_outlined,
-                        color: AppTheme.warning,
-                        selected: _transferStatus == 'Pending',
-                        onTap: () => setState(() => _transferStatus = 'Pending'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-          const NoteBox(
-            title: 'Two-way confirmation',
-            content: 'The transfer flow is a handshake — supervisor initiates, receiver confirms. Both sides must act for stock counts to update on both ends.',
-          ),
-          const SizedBox(height: 20),
-          const SubmitButton(label: 'Initiate Transfer', color: AppTheme.info),
-          const SizedBox(height: 16),
-        ],
-      ),
-    );
-  }
-
-  InputDecoration _dropdownDecoration(IconData icon, Color color) {
-    return InputDecoration(
-      prefixIcon: Icon(icon, size: 18, color: color),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppTheme.border, width: 0.8)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppTheme.border, width: 0.8)),
-      filled: true, fillColor: AppTheme.surface,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-    );
-  }
+  const SnackEntry({
+    required this.id,
+    required this.broughtBy,
+    required this.forWhom,
+    required this.items,
+    required this.cost,
+    required this.paymentMode,
+    required this.date,
+  });
 }
 
-class _StatusBubble extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _StatusBubble({required this.label, required this.icon, required this.color, required this.selected, required this.onTap});
+// ─── Screen ───────────────────────────────────────────────────────────────────
+class OthersScreen extends StatefulWidget {
+  const OthersScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: selected ? color.withOpacity(0.1) : AppTheme.surface,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: selected ? color : AppTheme.border, width: selected ? 1.5 : 0.8),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: selected ? color : AppTheme.textMuted, size: 16),
-            const SizedBox(width: 6),
-            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: selected ? color : AppTheme.textSecondary)),
-          ],
-        ),
-      ),
-    );
-  }
+  State<OthersScreen> createState() => _OthersScreenState();
 }
 
-class _TransferCard extends StatelessWidget {
-  final int step;
-  final String title;
-  final Widget child;
-
-  const _TransferCard({required this.step, required this.title, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: AppTheme.surfaceCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.border, width: 0.8)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 24, height: 24,
-                decoration: BoxDecoration(color: AppTheme.infoBg, borderRadius: BorderRadius.circular(6)),
-                alignment: Alignment.center,
-                child: Text('$step', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.info)),
-              ),
-              const SizedBox(width: 8),
-              Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
-            ],
-          ),
-          const SizedBox(height: 14),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-// ─── RENTAL ──────────────────────────────────────────────────────────────────
-class RentalScreen extends StatefulWidget {
-  const RentalScreen({super.key});
-
-  @override
-  State<RentalScreen> createState() => _RentalScreenState();
-}
-
-class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderStateMixin {
+class _OthersScreenState extends State<OthersScreen>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  String _billingMode = 'Per day';
 
   @override
   void initState() {
@@ -265,162 +69,248 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return Scaffold(
+      backgroundColor: AppTheme.surface,
+      appBar: AppBar(
+        title: const Text('Others'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        bottom: TabBar(
+          controller: _tabController,
+          labelColor: AppTheme.primary,
+          unselectedLabelColor: AppTheme.textSecondary,
+          indicatorColor: AppTheme.primary,
+          indicatorWeight: 2.5,
+          labelStyle:
+              const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          tabs: const [
+            Tab(text: 'Bike Petrol', icon: Icon(Icons.motorcycle)),
+            Tab(text: 'Snacks/Extras', icon: Icon(Icons.fastfood)),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: const [
+          BikePetrolTab(),
+          SnacksExtrasTab(),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Bike Petrol Tab ─────────────────────────────────────────────────────────
+class BikePetrolTab extends StatefulWidget {
+  const BikePetrolTab({super.key});
+
+  @override
+  State<BikePetrolTab> createState() => _BikePetrolTabState();
+}
+
+class _BikePetrolTabState extends State<BikePetrolTab> {
+  String? _selectedBike;
+  String _paymentMode = 'Cash';
+  bool _isSubmitting = false;
+
+  final TextEditingController _quantityController = TextEditingController();
+  final TextEditingController _amountController = TextEditingController();
+  final TextEditingController _notesController = TextEditingController();
+
+  final List<String> _bikes = [
+    'Bike-001 (Hero Splendor)',
+    'Bike-002 (Honda Shine)',
+    'Bike-003 (Bajaj Pulsar)',
+    'Bike-004 (TVS Apache)',
+    'Bike-005 (Royal Enfield)',
+  ];
+
+  final List<PetrolEntry> _petrolEntries = [
+    const PetrolEntry(
+      id: 'PTL-001',
+      bikeId: 'Bike-001 (Hero Splendor)',
+      date: '15 May, 10:30 AM',
+      quantity: 5.5,
+      amount: 550,
+      paymentMode: 'Cash',
+      notes: 'Regular fill',
+    ),
+    const PetrolEntry(
+      id: 'PTL-002',
+      bikeId: 'Bike-003 (Bajaj Pulsar)',
+      date: '15 May, 2:00 PM',
+      quantity: 3.2,
+      amount: 320,
+      paymentMode: 'UPI',
+      notes: 'Emergency top-up',
+    ),
+    const PetrolEntry(
+      id: 'PTL-003',
+      bikeId: 'Bike-002 (Honda Shine)',
+      date: '14 May, 9:00 AM',
+      quantity: 6.0,
+      amount: 600,
+      paymentMode: 'Cash',
+    ),
+  ];
+
+  @override
+  void dispose() {
+    _quantityController.dispose();
+    _amountController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  void _submitPetrolEntry() {
+    if (_selectedBike == null) {
+      _showSnackbar('Please select a bike', AppTheme.danger);
+      return;
+    }
+    if (_quantityController.text.isEmpty) {
+      _showSnackbar('Please enter quantity', AppTheme.danger);
+      return;
+    }
+    if (_amountController.text.isEmpty) {
+      _showSnackbar('Please enter amount', AppTheme.danger);
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+    Future.delayed(const Duration(seconds: 1), () {
+      setState(() {
+        _isSubmitting = false;
+        _petrolEntries.insert(
+            0,
+            PetrolEntry(
+              id: 'PTL-${DateTime.now().millisecondsSinceEpoch % 9000 + 1000}',
+              bikeId: _selectedBike!,
+              date:
+                  'Today ${DateTime.now().hour}:${DateTime.now().minute}',
+              quantity: double.parse(_quantityController.text),
+              amount: double.parse(_amountController.text),
+              paymentMode: _paymentMode,
+              notes: _notesController.text,
+            ));
+      });
+      _showSnackbar('Petrol entry added successfully!', AppTheme.success);
+      _clearForm();
+    });
+  }
+
+  void _clearForm() {
+    _selectedBike = null;
+    _quantityController.clear();
+    _amountController.clear();
+    _notesController.clear();
+    setState(() => _paymentMode = 'Cash');
+  }
+
+  void _showSnackbar(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildHeader(),
+          const SizedBox(height: 16),
+          _buildInfoCard(),
+          const SizedBox(height: 20),
+          _buildStepCard(
+            step: '1',
+            title: 'Select Bike',
+            color: AppTheme.info,
+            child: _buildBikeSelector(),
+          ),
+          const SizedBox(height: 16),
+          _buildStepCard(
+            step: '2',
+            title: 'Petrol Details',
+            color: AppTheme.warning,
+            child: _buildPetrolDetails(),
+          ),
+          const SizedBox(height: 16),
+          _buildStepCard(
+            step: '3',
+            title: 'Payment Mode',
+            color: AppTheme.primary,
+            child: _buildPaymentMode(),
+          ),
+          const SizedBox(height: 16),
+          _buildStepCard(
+            step: '4',
+            title: 'Notes (Optional)',
+            color: AppTheme.success,
+            child: _buildNotes(),
+          ),
+          const SizedBox(height: 20),
+          _buildSubmitButton(),
+          const SizedBox(height: 20),
+          _buildRecentEntries(),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Row(
       children: [
         Container(
-          color: AppTheme.surfaceCard,
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-          child: Column(
-            children: [
-              const ModuleHeader(
-                title: 'Rental',
-                subtitle: 'Track rented equipment from check-in to check-out',
-                emoji: '🔑',
-                color: AppTheme.danger,
-              ),
-              const SizedBox(height: 16),
-              TabBar(
-                controller: _tabController,
-                labelColor: AppTheme.primary,
-                unselectedLabelColor: AppTheme.textSecondary,
-                indicatorColor: AppTheme.primary,
-                indicatorWeight: 2,
-                tabs: const [Tab(text: 'Open Rental'), Tab(text: 'Close Rental')],
-              ),
-            ],
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppTheme.info.withValues(alpha: 0.15),
+                AppTheme.info.withValues(alpha: 0.05)
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(18),
+            border:
+                Border.all(color: AppTheme.info.withValues(alpha: 0.2)),
           ),
+          alignment: Alignment.center,
+          child: const Text('🏍️', style: TextStyle(fontSize: 28)),
         ),
-        Expanded(
-          child: TabBarView(
-            controller: _tabController,
+        const SizedBox(width: 16),
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Open Rental
-              SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(color: AppTheme.dangerBg, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.danger.withOpacity(0.25))),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.auto_fix_high, color: AppTheme.danger, size: 18),
-                          const SizedBox(width: 10),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('Auto-generated Rental ID', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.danger)),
-                              const Text('RNT-2024-0034', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppTheme.danger)),
-                              const SizedBox(height: 4),
-                              const HodApprovalBadge(),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    _RentalCard(
-                      step: 2,
-                      title: 'Item & Check-in Date',
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const AppFormField(label: 'Item name', hint: 'Rented equipment name', icon: Icons.build_outlined),
-                          const SizedBox(height: 10),
-                          const AppFormField(label: 'Check-in date', icon: Icons.calendar_today_outlined, readOnly: true),
-                          const SizedBox(height: 10),
-                          const Text('Billing mode', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: ['Per day', 'Per hour'].map((m) {
-                              final bool sel = _billingMode == m;
-                              return GestureDetector(
-                                onTap: () => setState(() => _billingMode = m),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 150),
-                                  margin: const EdgeInsets.only(right: 8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: sel ? AppTheme.danger : AppTheme.surface,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: sel ? AppTheme.danger : AppTheme.border),
-                                  ),
-                                  child: Text(m, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: sel ? Colors.white : AppTheme.textSecondary)),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    _RentalCard(
-                      step: 3,
-                      title: 'Rate & Fuel',
-                      child: Column(
-                        children: [
-                          AppFormField(label: 'Rate per ${_billingMode == 'Per day' ? 'day' : 'hour'} (₹)', icon: Icons.currency_rupee, keyboardType: TextInputType.number),
-                          const SizedBox(height: 10),
-                          const AppFormField(label: 'Fuel consumed (running total)', hint: 'Diesel/petrol as ₹ amount', icon: Icons.local_gas_station_outlined, keyboardType: TextInputType.number),
-                          const SizedBox(height: 10),
-                          const AppFormField(label: 'Notes', hint: 'Conditions, remarks, observations', icon: Icons.notes_outlined, maxLines: 2),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    const SubmitButton(label: 'Open Rental Record', color: AppTheme.danger),
-                    const SizedBox(height: 16),
-                  ],
+              Text(
+                'Bike Petrol Tracking',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.textPrimary,
                 ),
               ),
-
-              // Close Rental + Summary
-              SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _RentalCard(
-                      step: 6,
-                      title: 'Close Rental',
-                      child: Column(
-                        children: [
-                          const AppFormField(label: 'Rental ID', hint: 'Enter or scan rental ID', icon: Icons.tag),
-                          const SizedBox(height: 10),
-                          const AppFormField(label: 'Closing date', icon: Icons.event_available_outlined, readOnly: true),
-                          const SizedBox(height: 10),
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(color: AppTheme.infoBg, borderRadius: BorderRadius.circular(8)),
-                            child: const Row(
-                              children: [
-                                Icon(Icons.calculate_outlined, color: AppTheme.info, size: 16),
-                                SizedBox(width: 6),
-                                Text('Total auto-calculated from rate × duration', style: TextStyle(fontSize: 11.5, color: AppTheme.info)),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text('Rental Summary View', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
-                    const SizedBox(height: 10),
-                    InfoCardGrid(cards: [
-                      InfoCardData('Rental ID & item name', 'Identification'),
-                      InfoCardData('In date / Out date', 'Rental period'),
-                      InfoCardData('Earned amount', 'Total billed'),
-                      InfoCardData('Used amount', 'Expenses paid out'),
-                      InfoCardData('Remaining amount', 'Balance to collect'),
-                      InfoCardData('Account numbers', 'Managed by HOD'),
-                    ]),
-                    const SizedBox(height: 20),
-                    const SubmitButton(label: 'Close Rental Record', color: AppTheme.success),
-                    const SizedBox(height: 16),
-                  ],
+              SizedBox(height: 4),
+              Text(
+                'Record petrol details for site bikes',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppTheme.textSecondary,
                 ),
               ),
             ],
@@ -429,381 +319,998 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
       ],
     );
   }
-}
 
-class _RentalCard extends StatelessWidget {
-  final int step;
-  final String title;
-  final Widget child;
-
-  const _RentalCard({required this.step, required this.title, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildInfoCard() {
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: AppTheme.surfaceCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.border, width: 0.8)),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.info.withValues(alpha: 0.1),
+            AppTheme.infoBg
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border:
+            Border.all(color: AppTheme.info.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppTheme.info.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.local_gas_station,
+                color: AppTheme.info, size: 22),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Track Petrol Usage',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Record petrol quantity, amount, and payment mode for each bike.',
+                  style: TextStyle(
+                      fontSize: 11, color: AppTheme.textSecondary),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepCard({
+    required String step,
+    required String title,
+    required Color color,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.border, width: 0.8),
+        boxShadow: AppTheme.cardShadow,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Container(
-                width: 24, height: 24,
-                decoration: BoxDecoration(color: AppTheme.dangerBg, borderRadius: BorderRadius.circular(6)),
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [color, color.withValues(alpha: 0.8)],
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                ),
                 alignment: Alignment.center,
-                child: Text('$step', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.danger)),
+                child: Text(
+                  step,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
               ),
-              const SizedBox(width: 8),
-              Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+              const SizedBox(width: 12),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           child,
         ],
       ),
     );
   }
-}
 
-// ─── TASKS ───────────────────────────────────────────────────────────────────
-class TasksScreen extends StatefulWidget {
-  const TasksScreen({super.key});
-
-  @override
-  State<TasksScreen> createState() => _TasksScreenState();
-}
-
-class _TasksScreenState extends State<TasksScreen> {
-  String _filter = 'All';
-
-  final List<_TaskItem> _tasks = [
-    _TaskItem('Check diesel levels at Site A', 'Daily', false, 'High'),
-    _TaskItem('Update machine log for MCH-003', 'Daily', true, 'Normal'),
-    _TaskItem('Verify operator attendance photos', 'Daily', false, 'High'),
-    _TaskItem('Submit weekly stock summary', 'Weekly', false, 'Normal'),
-    _TaskItem('Calibrate equipment at Site B', 'Weekly', true, 'High'),
-    _TaskItem('Review rental records', 'Monthly', false, 'Normal'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final filtered = _filter == 'All' ? _tasks : _tasks.where((t) => t.type == _filter).toList();
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const ModuleHeader(
-            title: 'Tasks & Checklist',
-            subtitle: 'HOD-assigned tasks — complete and track progress',
-            emoji: '✅',
-            color: AppTheme.success,
-          ),
-          const SizedBox(height: 16),
-
-          // Stats row
-          Row(
-            children: [
-              _TaskStat(label: 'Total', value: '${_tasks.length}', color: AppTheme.primary),
-              const SizedBox(width: 8),
-              _TaskStat(label: 'Done', value: '${_tasks.where((t) => t.done).length}', color: AppTheme.success),
-              const SizedBox(width: 8),
-              _TaskStat(label: 'Pending', value: '${_tasks.where((t) => !t.done).length}', color: AppTheme.warning),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Filter chips
-          Row(
-            children: ['All', 'Daily', 'Weekly', 'Monthly'].map((f) {
-              final bool sel = _filter == f;
-              return GestureDetector(
-                onTap: () => setState(() => _filter = f),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  margin: const EdgeInsets.only(right: 6),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: sel ? AppTheme.primary : AppTheme.surface,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: sel ? AppTheme.primary : AppTheme.border),
-                  ),
-                  child: Text(f, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: sel ? Colors.white : AppTheme.textSecondary)),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 14),
-
-          // Task list
-          ...filtered.map((task) => _TaskTile(
-            task: task,
-            onToggle: () => setState(() => task.done = !task.done),
-          )),
-
-          const SizedBox(height: 16),
-          const NoteBox(
-            title: 'Performance tracking',
-            content: 'Task completion feeds into HOD-visible supervisor performance report automatically. The map & specifications module also tracks compliance.',
-          ),
-          const SizedBox(height: 16),
-        ],
+  Widget _buildBikeSelector() {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: DropdownButtonFormField<String>(
+        initialValue: _selectedBike,
+        hint: const Text('Select bike'),
+        isExpanded: true,
+        decoration: const InputDecoration(
+          prefixIcon: Icon(Icons.motorcycle, size: 20),
+          border: InputBorder.none,
+          contentPadding:
+              EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        ),
+        items: _bikes.map((bike) {
+          return DropdownMenuItem(
+            value: bike,
+            child: Text(bike, style: const TextStyle(fontSize: 13)),
+          );
+        }).toList(),
+        onChanged: (value) => setState(() => _selectedBike = value),
       ),
     );
   }
-}
 
-class _TaskItem {
-  final String title, type, priority;
-  bool done;
-  _TaskItem(this.title, this.type, this.done, this.priority);
-}
+  Widget _buildPetrolDetails() {
+    return Column(
+      children: [
+        TextField(
+          controller: _quantityController,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: 'Quantity (Liters)',
+            hintText: 'Enter petrol quantity',
+            prefixIcon: const Icon(Icons.water_drop, size: 20),
+            suffixText: 'L',
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _amountController,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: 'Amount (₹)',
+            hintText: 'Enter total amount',
+            prefixIcon: const Icon(Icons.currency_rupee, size: 20),
+            suffixText: '₹',
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ],
+    );
+  }
 
-class _TaskTile extends StatelessWidget {
-  final _TaskItem task;
-  final VoidCallback onToggle;
+  Widget _buildPaymentMode() {
+    return Row(
+      children: ['Cash', 'UPI', 'Digital'].map((mode) {
+        final isSelected = _paymentMode == mode;
+        IconData icon;
+        switch (mode) {
+          case 'Cash':
+            icon = Icons.money;
+            break;
+          case 'UPI':
+            icon = Icons.qr_code;
+            break;
+          default:
+            icon = Icons.phone_android;
+        }
+        return Expanded(
+          child: GestureDetector(
+            onTap: () => setState(() => _paymentMode = mode),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? AppTheme.primary.withValues(alpha: 0.15)
+                    : AppTheme.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isSelected ? AppTheme.primary : AppTheme.border,
+                  width: isSelected ? 1.5 : 0.8,
+                ),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    icon,
+                    color: isSelected
+                        ? AppTheme.primary
+                        : AppTheme.textMuted,
+                    size: 24,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    mode,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: isSelected
+                          ? AppTheme.primary
+                          : AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
 
-  const _TaskTile({required this.task, required this.onToggle});
+  Widget _buildNotes() {
+    return TextField(
+      controller: _notesController,
+      maxLines: 2,
+      decoration: InputDecoration(
+        labelText: 'Notes',
+        hintText: 'Any additional information...',
+        prefixIcon: const Icon(Icons.notes_outlined, size: 20),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildSubmitButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: _isSubmitting ? null : _submitPetrolEntry,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppTheme.info,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          elevation: 0,
+        ),
+        child: _isSubmitting
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              )
+            : const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.save, size: 20, color: Colors.white),
+                  SizedBox(width: 10),
+                  Text(
+                    'Save Petrol Entry',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildRecentEntries() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Recent Petrol Entries',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        ..._petrolEntries
+            .map((entry) => _buildPetrolEntryCard(entry)),
+      ],
+    );
+  }
+
+  Widget _buildPetrolEntryCard(PetrolEntry entry) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppTheme.surfaceCard,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: task.done ? AppTheme.success.withOpacity(0.3) : AppTheme.border, width: 0.8),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border, width: 0.8),
       ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        leading: GestureDetector(
-          onTap: onToggle,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: task.done ? AppTheme.success : AppTheme.surface,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: task.done ? AppTheme.success : AppTheme.border, width: task.done ? 0 : 1.5),
-            ),
-            child: task.done ? const Icon(Icons.check, color: Colors.white, size: 16) : null,
-          ),
-        ),
-        title: Text(
-          task.title,
-          style: TextStyle(
-            fontSize: 13.5,
-            fontWeight: FontWeight.w500,
-            color: task.done ? AppTheme.textMuted : AppTheme.textPrimary,
-            decoration: task.done ? TextDecoration.lineThrough : null,
-          ),
-        ),
-        subtitle: Row(
-          children: [
-            _TypeBadge(type: task.type),
-            const SizedBox(width: 6),
-            if (task.priority == 'High')
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(color: AppTheme.dangerBg, borderRadius: BorderRadius.circular(4)),
-                child: const Text('High', style: TextStyle(fontSize: 10, color: AppTheme.danger, fontWeight: FontWeight.w600)),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TypeBadge extends StatelessWidget {
-  final String type;
-  const _TypeBadge({required this.type});
-
-  @override
-  Widget build(BuildContext context) {
-    Color c = type == 'Daily' ? AppTheme.info : type == 'Weekly' ? AppTheme.success : AppTheme.warning;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-      child: Text(type, style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w600)),
-    );
-  }
-}
-
-class _TaskStat extends StatelessWidget {
-  final String label, value;
-  final Color color;
-  const _TaskStat({required this.label, required this.value, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.07),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withOpacity(0.2)),
-        ),
-        child: Column(
-          children: [
-            Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: color)),
-            Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─── REPORTS ─────────────────────────────────────────────────────────────────
-class ReportsScreen extends StatefulWidget {
-  const ReportsScreen({super.key});
-
-  @override
-  State<ReportsScreen> createState() => _ReportsScreenState();
-}
-
-class _ReportsScreenState extends State<ReportsScreen> {
-  String _selectedReport = '';
-  String _selectedPeriod = 'Monthly';
-
-  static const List<_ReportType> _reportTypes = [
-    _ReportType('📊', 'Machines summary', 'Machine ID · Operator · Hour/Day rate · Earned · Used · Diesel · Balance'),
-    _ReportType('👷', 'Workers', 'ID · Name · Earned amount · Used amount · Remaining balance'),
-    _ReportType('🔑', 'Rental', 'ID · Item name · Start/End date · Working days · Earned · Used · Remaining'),
-    _ReportType('⛽', 'Diesel', 'Batch ID · Total in · Amount · Consumed (liters) · Amount · Remaining diesel'),
-    _ReportType('↩️', 'Returns', 'Batch ID · Machine name · Start/End date · Working days · Earned · Used · Remaining'),
-    _ReportType('🏍️', 'Site bikes petrol', 'Bike ID · Petrol consumption note'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          const ModuleHeader(
-            title: 'Reports',
-            subtitle: 'Auto-generated summaries across all modules',
-            emoji: '📊',
-            color: AppTheme.primary,
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppTheme.info.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.motorcycle,
+                color: AppTheme.info, size: 22),
           ),
-          const SizedBox(height: 20),
-
-          // Step 1 — Report type
-          const SectionHeader(title: 'Step 1 — Select report type'),
-          Column(
-            children: _reportTypes.map((r) {
-              final bool sel = _selectedReport == r.title;
-              return GestureDetector(
-                onTap: () => setState(() => _selectedReport = r.title),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: sel ? AppTheme.primary : AppTheme.surfaceCard,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: sel ? AppTheme.primary : AppTheme.border, width: sel ? 1.5 : 0.8),
-                  ),
-                  child: Row(
-                    children: [
-                      Text(r.emoji, style: const TextStyle(fontSize: 20)),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(r.title, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: sel ? Colors.white : AppTheme.textPrimary)),
-                            const SizedBox(height: 3),
-                            Text(r.fields, style: TextStyle(fontSize: 11, color: sel ? Colors.white70 : AppTheme.textMuted), maxLines: 2, overflow: TextOverflow.ellipsis),
-                          ],
-                        ),
-                      ),
-                      Icon(sel ? Icons.radio_button_checked : Icons.radio_button_off, color: sel ? Colors.white : AppTheme.textMuted, size: 18),
-                    ],
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.bikeId,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
                   ),
                 ),
-              );
-            }).toList(),
-          ),
-
-          const SizedBox(height: 20),
-
-          // Step 2 — Filters
-          const SectionHeader(title: 'Step 2 — Apply filters'),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: AppTheme.surfaceCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.border, width: 0.8)),
-            child: Column(
-              children: [
+                const SizedBox(height: 4),
                 Row(
                   children: [
-                    Expanded(child: const AppFormField(label: 'Start date', icon: Icons.date_range_outlined, readOnly: true)),
+                    Text(
+                      '${entry.quantity}L',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary),
+                    ),
                     const SizedBox(width: 8),
-                    Expanded(child: const AppFormField(label: 'End date', icon: Icons.date_range_outlined, readOnly: true)),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                const AppFormField(label: 'Name / ID', hint: 'Filter by name or ID', icon: Icons.search),
-                const SizedBox(height: 10),
-                const AppFormField(label: 'Stock point', hint: 'Filter by location', icon: Icons.location_on_outlined),
-                const SizedBox(height: 12),
-                Row(
-                  children: ['Daily', 'Weekly', 'Monthly'].map((p) {
-                    final bool sel = _selectedPeriod == p;
-                    return GestureDetector(
-                      onTap: () => setState(() => _selectedPeriod = p),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        margin: const EdgeInsets.only(right: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: sel ? AppTheme.primary : AppTheme.surface,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: sel ? AppTheme.primary : AppTheme.border),
-                        ),
-                        child: Text(p, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: sel ? Colors.white : AppTheme.textSecondary)),
+                    Text(
+                      '₹${entry.amount.toStringAsFixed(0)}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: entry.paymentMode == 'UPI'
+                            ? AppTheme.successBg
+                            : AppTheme.warningBg,
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    );
-                  }).toList(),
+                      child: Text(
+                        entry.paymentMode,
+                        style: TextStyle(
+                          fontSize: 9,
+                          color: entry.paymentMode == 'UPI'
+                              ? AppTheme.success
+                              : AppTheme.warning,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-
-          const SizedBox(height: 16),
-
-          // Step 3 — Generate
-          const SectionHeader(title: 'Step 3 — Generate report'),
-          SubmitButton(
-            label: _selectedReport.isEmpty ? 'Select a report type first' : 'Generate $_selectedReport Report',
-            color: _selectedReport.isEmpty ? AppTheme.textMuted : AppTheme.primary,
-            onTap: _selectedReport.isEmpty ? null : () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Generating $_selectedReport report...'), backgroundColor: AppTheme.primary),
-              );
-            },
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                entry.date,
+                style: const TextStyle(
+                    fontSize: 10, color: AppTheme.textMuted),
+              ),
+              if (entry.notes.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  entry.notes,
+                  style: const TextStyle(
+                      fontSize: 9,
+                      color: AppTheme.textMuted,
+                      fontStyle: FontStyle.italic),
+                ),
+              ],
+            ],
           ),
-
-          const SizedBox(height: 16),
-          const NoteBox(
-            title: 'Tip',
-            content: 'Reports here reflect the same data as category-specific summaries inside each module. Use filters to generate period-specific or person-specific reports for review.',
-          ),
-          const SizedBox(height: 16),
         ],
       ),
     );
   }
 }
 
-class _ReportType {
-  final String emoji, title, fields;
-  const _ReportType(this.emoji, this.title, this.fields);
+// ─── Snacks/Extras Tab ──────────────────────────────────────────────────────
+class SnacksExtrasTab extends StatefulWidget {
+  const SnacksExtrasTab({super.key});
+
+  @override
+  State<SnacksExtrasTab> createState() => _SnacksExtrasTabState();
+}
+
+class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
+  String _paymentMode = 'Cash';
+  bool _isSubmitting = false;
+
+  final TextEditingController _broughtByController =
+      TextEditingController();
+  final TextEditingController _forWhomController =
+      TextEditingController();
+  final TextEditingController _itemsController = TextEditingController();
+  final TextEditingController _costController = TextEditingController();
+
+  final List<SnackEntry> _snackEntries = [
+    const SnackEntry(
+      id: 'SNK-001',
+      broughtBy: 'Ramesh',
+      forWhom: 'Site A Team',
+      items: 'Samosa, Tea, Biscuits',
+      cost: 350,
+      paymentMode: 'Cash',
+      date: '15 May, 11:00 AM',
+    ),
+    const SnackEntry(
+      id: 'SNK-002',
+      broughtBy: 'Suresh',
+      forWhom: 'All Workers',
+      items: 'Cold drinks, Chips',
+      cost: 500,
+      paymentMode: 'UPI',
+      date: '14 May, 3:30 PM',
+    ),
+  ];
+
+  @override
+  void dispose() {
+    _broughtByController.dispose();
+    _forWhomController.dispose();
+    _itemsController.dispose();
+    _costController.dispose();
+    super.dispose();
+  }
+
+  void _submitSnackEntry() {
+    if (_broughtByController.text.isEmpty) {
+      _showSnackbar('Please enter who brought', AppTheme.danger);
+      return;
+    }
+    if (_forWhomController.text.isEmpty) {
+      _showSnackbar('Please enter for whom', AppTheme.danger);
+      return;
+    }
+    if (_itemsController.text.isEmpty) {
+      _showSnackbar('Please enter items', AppTheme.danger);
+      return;
+    }
+    if (_costController.text.isEmpty) {
+      _showSnackbar('Please enter cost', AppTheme.danger);
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+    Future.delayed(const Duration(seconds: 1), () {
+      setState(() {
+        _isSubmitting = false;
+        _snackEntries.insert(
+            0,
+            SnackEntry(
+              id: 'SNK-${DateTime.now().millisecondsSinceEpoch % 9000 + 1000}',
+              broughtBy: _broughtByController.text,
+              forWhom: _forWhomController.text,
+              items: _itemsController.text,
+              cost: double.parse(_costController.text),
+              paymentMode: _paymentMode,
+              date:
+                  'Today ${DateTime.now().hour}:${DateTime.now().minute}',
+            ));
+      });
+      _showSnackbar('Snack entry added successfully!', AppTheme.success);
+      _clearForm();
+    });
+  }
+
+  void _clearForm() {
+    _broughtByController.clear();
+    _forWhomController.clear();
+    _itemsController.clear();
+    _costController.clear();
+    setState(() => _paymentMode = 'Cash');
+  }
+
+  void _showSnackbar(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildHeader(),
+          const SizedBox(height: 16),
+          _buildInfoCard(),
+          const SizedBox(height: 20),
+          _buildStepCard(
+            step: '1',
+            title: 'Who Brought & For Whom',
+            color: AppTheme.warning,
+            child: _buildPeopleDetails(),
+          ),
+          const SizedBox(height: 16),
+          _buildStepCard(
+            step: '2',
+            title: 'Items & Cost',
+            color: AppTheme.info,
+            child: _buildItemDetails(),
+          ),
+          const SizedBox(height: 16),
+          _buildStepCard(
+            step: '3',
+            title: 'Payment Mode',
+            color: AppTheme.success,
+            child: _buildPaymentMode(),
+          ),
+          const SizedBox(height: 20),
+          _buildSubmitButton(),
+          const SizedBox(height: 20),
+          _buildRecentEntries(),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Row(
+      children: [
+        Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppTheme.warning.withValues(alpha: 0.15),
+                AppTheme.warning.withValues(alpha: 0.05)
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+                color: AppTheme.warning.withValues(alpha: 0.2)),
+          ),
+          alignment: Alignment.center,
+          child: const Text('🍕', style: TextStyle(fontSize: 28)),
+        ),
+        const SizedBox(width: 16),
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Snacks & Extras',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'Record snacks and extra items details',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInfoCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.warning.withValues(alpha: 0.1),
+            AppTheme.warningBg
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: AppTheme.warning.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppTheme.warning.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.fastfood,
+                color: AppTheme.warning, size: 22),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Track Extras',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Record who brought items, for whom, what items, and payment details.',
+                  style: TextStyle(
+                      fontSize: 11, color: AppTheme.textSecondary),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepCard({
+    required String step,
+    required String title,
+    required Color color,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.border, width: 0.8),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [color, color.withValues(alpha: 0.8)],
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  step,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPeopleDetails() {
+    return Column(
+      children: [
+        TextField(
+          controller: _broughtByController,
+          decoration: InputDecoration(
+            labelText: 'Brought By',
+            hintText: 'Name of person who brought',
+            prefixIcon: const Icon(Icons.person, size: 20),
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _forWhomController,
+          decoration: InputDecoration(
+            labelText: 'For Whom',
+            hintText: 'Team, department, or person names',
+            prefixIcon: const Icon(Icons.people, size: 20),
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildItemDetails() {
+    return Column(
+      children: [
+        TextField(
+          controller: _itemsController,
+          maxLines: 3,
+          decoration: InputDecoration(
+            labelText: 'Items/Snacks',
+            hintText: 'List all items (e.g., Samosa, Tea, Biscuits)',
+            prefixIcon: const Icon(Icons.fastfood, size: 20),
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _costController,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: 'Total Cost (₹)',
+            hintText: 'Enter total cost',
+            prefixIcon: const Icon(Icons.currency_rupee, size: 20),
+            suffixText: '₹',
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPaymentMode() {
+    return Row(
+      children: ['Cash', 'UPI', 'Digital'].map((mode) {
+        final isSelected = _paymentMode == mode;
+        IconData icon;
+        switch (mode) {
+          case 'Cash':
+            icon = Icons.money;
+            break;
+          case 'UPI':
+            icon = Icons.qr_code;
+            break;
+          default:
+            icon = Icons.phone_android;
+        }
+        return Expanded(
+          child: GestureDetector(
+            onTap: () => setState(() => _paymentMode = mode),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? AppTheme.success.withValues(alpha: 0.15)
+                    : AppTheme.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isSelected ? AppTheme.success : AppTheme.border,
+                  width: isSelected ? 1.5 : 0.8,
+                ),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    icon,
+                    color: isSelected
+                        ? AppTheme.success
+                        : AppTheme.textMuted,
+                    size: 24,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    mode,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: isSelected
+                          ? AppTheme.success
+                          : AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildSubmitButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: _isSubmitting ? null : _submitSnackEntry,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppTheme.warning,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          elevation: 0,
+        ),
+        child: _isSubmitting
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              )
+            : const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.save, size: 20, color: Colors.white),
+                  SizedBox(width: 10),
+                  Text(
+                    'Save Snack Entry',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildRecentEntries() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Recent Snack Entries',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        ..._snackEntries
+            .map((entry) => _buildSnackEntryCard(entry)),
+      ],
+    );
+  }
+
+  Widget _buildSnackEntryCard(SnackEntry entry) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border, width: 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppTheme.warning.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(Icons.fastfood,
+                    color: AppTheme.warning, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${entry.broughtBy} → ${entry.forWhom}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      entry.items,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textSecondary,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '₹${entry.cost.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.warning,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: entry.paymentMode == 'UPI'
+                          ? AppTheme.successBg
+                          : AppTheme.warningBg,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      entry.paymentMode,
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: entry.paymentMode == 'UPI'
+                            ? AppTheme.success
+                            : AppTheme.warning,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Text(
+                entry.date,
+                style: const TextStyle(
+                    fontSize: 10, color: AppTheme.textMuted),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }

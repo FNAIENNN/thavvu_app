@@ -9,67 +9,98 @@ class TasksScreen extends StatefulWidget {
   State<TasksScreen> createState() => _TasksScreenState();
 }
 
-class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStateMixin {
+class _TasksScreenState extends State<TasksScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
   String _filter = 'All';
   String _searchQuery = '';
-  bool _isLoading = false;
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
+  final bool _isLoading = false;
 
+  // Checklists data
+  final List<Map<String, dynamic>> _checklists = [
+    {
+      'title': 'Daily Safety Inspection',
+      'type': 'Daily',
+      'done': false,
+      'items': ['Check fire extinguishers', 'Inspect safety gear', 'Verify emergency exits']
+    },
+    {
+      'title': 'Equipment Maintenance Check',
+      'type': 'Weekly',
+      'done': false,
+      'items': ['Check oil levels', 'Inspect hydraulic systems', 'Test emergency stops']
+    },
+    {
+      'title': 'Site Cleanliness Audit',
+      'type': 'Daily',
+      'done': true,
+      'items': ['Clear debris from walkways', 'Organize tool storage', 'Dispose waste properly']
+    },
+  ];
+
+  // Tasks data
   final List<Map<String, dynamic>> _tasks = [
-    {'title': 'Check diesel levels at Site A', 'type': 'Daily', 'done': false, 'priority': 'high', 'dueDate': 'Today', 'assignedBy': 'HOD Sharma'},
-    {'title': 'Update machine log for MCH-003', 'type': 'Daily', 'done': true, 'priority': 'normal', 'dueDate': 'Yesterday', 'assignedBy': 'HOD Sharma'},
-    {'title': 'Verify operator attendance photos', 'type': 'Daily', 'done': false, 'priority': 'high', 'dueDate': 'Today', 'assignedBy': 'HOD Patel'},
-    {'title': 'Submit weekly stock summary', 'type': 'Weekly', 'done': false, 'priority': 'normal', 'dueDate': 'This Week', 'assignedBy': 'HOD Sharma'},
-    {'title': 'Calibrate equipment at Site B', 'type': 'Weekly', 'done': true, 'priority': 'high', 'dueDate': 'This Week', 'assignedBy': 'HOD Mehta'},
-    {'title': 'Review rental records', 'type': 'Monthly', 'done': false, 'priority': 'normal', 'dueDate': 'End of Month', 'assignedBy': 'HOD Sharma'},
-    {'title': 'Conduct safety inspection', 'type': 'Weekly', 'done': false, 'priority': 'high', 'dueDate': 'Tomorrow', 'assignedBy': 'HOD Patel'},
-    {'title': 'Update stock register', 'type': 'Daily', 'done': false, 'priority': 'normal', 'dueDate': 'Today', 'assignedBy': 'HOD Mehta'},
+    {
+      'title': 'Check diesel levels at Site A',
+      'type': 'Daily',
+      'done': false,
+      'priority': 'high',
+      'dueDate': 'Today',
+      'assignedBy': 'HOD Sharma',
+      'hasPhoto': false,
+      'hasVideo': false,
+      'hasVoiceNote': false,
+      'notes': ''
+    },
+    {
+      'title': 'Update machine log for MCH-003',
+      'type': 'Daily',
+      'done': true,
+      'priority': 'normal',
+      'dueDate': 'Yesterday',
+      'assignedBy': 'HOD Sharma',
+      'hasPhoto': true,
+      'hasVideo': false,
+      'hasVoiceNote': false,
+      'notes': 'Completed with photo evidence'
+    },
+    {
+      'title': 'Verify operator attendance photos',
+      'type': 'Daily',
+      'done': false,
+      'priority': 'high',
+      'dueDate': 'Today',
+      'assignedBy': 'HOD Patel',
+      'hasPhoto': false,
+      'hasVideo': false,
+      'hasVoiceNote': true,
+      'notes': ''
+    },
+    {
+      'title': 'Submit weekly stock summary',
+      'type': 'Weekly',
+      'done': false,
+      'priority': 'normal',
+      'dueDate': 'This Week',
+      'assignedBy': 'HOD Sharma',
+      'hasPhoto': false,
+      'hasVideo': true,
+      'hasVoiceNote': false,
+      'notes': 'Video walkthrough required'
+    },
   ];
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-      duration: const Duration(milliseconds: 600),
-      vsync: this,
-    );
-    _fadeAnimation = CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOut,
-    );
-    _animationController.forward();
+    _tabController = TabController(length: 2, vsync: this);
   }
 
   @override
   void dispose() {
-    _animationController.dispose();
+    _tabController.dispose();
     super.dispose();
   }
-
-  List<Map<String, dynamic>> get _filteredTasks {
-    var tasks = _tasks;
-    
-    // Apply type filter
-    if (_filter != 'All') {
-      tasks = tasks.where((t) => t['type'] == _filter).toList();
-    }
-    
-    // Apply search filter
-    if (_searchQuery.isNotEmpty) {
-      tasks = tasks.where((t) => 
-        t['title'].toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        t['assignedBy'].toLowerCase().contains(_searchQuery.toLowerCase())
-      ).toList();
-    }
-    
-    return tasks;
-  }
-
-  int get _totalCount => _tasks.length;
-  int get _doneCount => _tasks.where((t) => t['done'] == true).length;
-  int get _pendingCount => _totalCount - _doneCount;
-  double get _completionPercentage => _totalCount > 0 ? (_doneCount / _totalCount) * 100 : 0;
 
   void _toggleTask(Map<String, dynamic> task) {
     setState(() {
@@ -94,10 +125,116 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     );
   }
 
+  void _showMediaOptions(Map<String, dynamic> task) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Add to: ${task['title']}',
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildMediaOption(
+                  icon: Icons.camera_alt,
+                  label: 'Photo',
+                  color: AppTheme.info,
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() => task['hasPhoto'] = !task['hasPhoto']);
+                    _showSnackbar(
+                      task['hasPhoto'] ? 'Photo attached' : 'Photo removed',
+                      AppTheme.info,
+                    );
+                  },
+                ),
+                _buildMediaOption(
+                  icon: Icons.videocam,
+                  label: 'Video',
+                  color: AppTheme.danger,
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() => task['hasVideo'] = !task['hasVideo']);
+                    _showSnackbar(
+                      task['hasVideo'] ? 'Video attached' : 'Video removed',
+                      AppTheme.danger,
+                    );
+                  },
+                ),
+                _buildMediaOption(
+                  icon: Icons.mic,
+                  label: 'Voice Note',
+                  color: AppTheme.warning,
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() => task['hasVoiceNote'] = !task['hasVoiceNote']);
+                    _showSnackbar(
+                      task['hasVoiceNote'] ? 'Voice note added' : 'Voice note removed',
+                      AppTheme.warning,
+                    );
+                  },
+                ),
+                _buildMediaOption(
+                  icon: Icons.text_fields,
+                  label: 'Text Note',
+                  color: AppTheme.success,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showTextNoteDialog(task);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showTextNoteDialog(Map<String, dynamic> task) {
+    final TextEditingController noteController = TextEditingController(text: task['notes']);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Text Note'),
+        content: TextField(
+          controller: noteController,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            hintText: 'Enter your note here...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              setState(() => task['notes'] = noteController.text);
+              Navigator.pop(context);
+              _showSnackbar('Note saved successfully', AppTheme.success);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final filteredTasks = _filteredTasks;
-
     return Scaffold(
       backgroundColor: AppTheme.surface,
       appBar: AppBar(
@@ -116,46 +253,70 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
             onPressed: () => _showFilterDialog(),
           ),
         ],
-      ),
-      body: FadeTransition(
-        opacity: _fadeAnimation,
-        child: RefreshIndicator(
-          onRefresh: () async {
-            setState(() {});
-            await Future.delayed(const Duration(seconds: 1));
-          },
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(),
-                const SizedBox(height: 20),
-                _buildProgressSection(),
-                const SizedBox(height: 20),
-                _buildStatsRow(),
-                const SizedBox(height: 16),
-                _buildCategoryTabs(),
-                const SizedBox(height: 16),
-                if (_searchQuery.isNotEmpty) _buildSearchChip(),
-                if (filteredTasks.isEmpty)
-                  _buildEmptyState()
-                else
-                  ...filteredTasks.map((task) => _buildTaskTile(task)),
-                const SizedBox(height: 16),
-                _buildMotivationalCard(),
-                const SizedBox(height: 16),
-                const NoteBox(
-                  title: 'Performance Tracking',
-                  content: 'Task completion feeds into HOD-visible supervisor performance report automatically. Complete tasks on time to maintain high performance rating.',
-                  icon: Icons.trending_up,
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ),
+        bottom: TabBar(
+          controller: _tabController,
+          labelColor: AppTheme.primary,
+          unselectedLabelColor: AppTheme.textSecondary,
+          indicatorColor: AppTheme.primary,
+          indicatorWeight: 2.5,
+          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          tabs: const [
+            Tab(text: 'Checklists', icon: Icon(Icons.checklist)),
+            Tab(text: 'Tasks', icon: Icon(Icons.task_alt)),
+          ],
         ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildChecklistsTab(),
+          _buildTasksTab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChecklistsTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildHeader(),
+          const SizedBox(height: 20),
+          _buildChecklistStats(),
+          const SizedBox(height: 20),
+          _buildCategoryTabs(),
+          const SizedBox(height: 16),
+          ..._checklists.map((checklist) => _buildChecklistCard(checklist)),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTasksTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildHeader(),
+          const SizedBox(height: 20),
+          _buildTasksStats(),
+          const SizedBox(height: 20),
+          _buildCategoryTabs(),
+          const SizedBox(height: 16),
+          ..._tasks.map((task) => _buildTaskTile(task)),
+          const SizedBox(height: 16),
+          const NoteBox(
+            title: 'Performance Tracking',
+            content:
+                'Task completion feeds into HOD-visible supervisor performance report automatically. Complete tasks on time to maintain high performance rating.',
+            icon: Icons.trending_up,
+          ),
+          const SizedBox(height: 16),
+        ],
       ),
     );
   }
@@ -168,12 +329,15 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
           height: 56,
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [AppTheme.success.withOpacity(0.15), AppTheme.success.withOpacity(0.05)],
+              colors: [
+                AppTheme.success.withValues(alpha: 0.15),
+                AppTheme.success.withValues(alpha: 0.05)
+              ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: AppTheme.success.withOpacity(0.2)),
+            border: Border.all(color: AppTheme.success.withValues(alpha: 0.2)),
           ),
           alignment: Alignment.center,
           child: const Text('✅', style: TextStyle(fontSize: 28)),
@@ -185,7 +349,10 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
             children: [
               Text(
                 'Tasks & Checklist',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary),
               ),
               SizedBox(height: 4),
               Text(
@@ -199,104 +366,70 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildProgressSection() {
+  Widget _buildChecklistStats() {
+    int total = _checklists.length;
+    int completed = _checklists.where((c) => c['done'] == true).length;
+    int pending = total - completed;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           colors: [AppTheme.primary, AppTheme.accent],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(20),
-        boxShadow: AppTheme.mediumShadow,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          const Text(
-            'Overall Progress',
-            style: TextStyle(fontSize: 13, color: Colors.white70),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '${_completionPercentage.toStringAsFixed(0)}%',
-                  style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
-                ),
-              ),
-              const Text(
-                'Completed',
-                style: TextStyle(fontSize: 13, color: Colors.white70),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: LinearProgressIndicator(
-              value: _completionPercentage / 100,
-              backgroundColor: Colors.white.withOpacity(0.3),
-              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-              minHeight: 8,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('$_doneCount completed', style: const TextStyle(fontSize: 11, color: Colors.white70)),
-              Text('$_pendingCount remaining', style: const TextStyle(fontSize: 11, color: Colors.white70)),
-            ],
-          ),
+          _buildStatItem('Total', '$total', Icons.checklist, Colors.white),
+          _buildStatItem('Completed', '$completed', Icons.check_circle, Colors.green),
+          _buildStatItem('Pending', '$pending', Icons.pending, Colors.orange),
         ],
       ),
     );
   }
 
-  Widget _buildStatsRow() {
-    return Row(
-      children: [
-        _buildStatCard('Total', '$_totalCount', AppTheme.primary, Icons.task_alt),
-        const SizedBox(width: 12),
-        _buildStatCard('Completed', '$_doneCount', AppTheme.success, Icons.check_circle),
-        const SizedBox(width: 12),
-        _buildStatCard('Pending', '$_pendingCount', AppTheme.warning, Icons.pending),
-      ],
+  Widget _buildTasksStats() {
+    int total = _tasks.length;
+    int completed = _tasks.where((t) => t['done'] == true).length;
+    int pending = total - completed;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppTheme.primary, AppTheme.accent],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        children: [
+          _buildStatItem('Total', '$total', Icons.task_alt, Colors.white),
+          _buildStatItem('Completed', '$completed', Icons.check_circle, Colors.green),
+          _buildStatItem('Pending', '$pending', Icons.pending, Colors.orange),
+        ],
+      ),
     );
   }
 
-  Widget _buildStatCard(String label, String value, Color color, IconData icon) {
+  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
     return Expanded(
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [color.withOpacity(0.08), color.withOpacity(0.02)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withOpacity(0.15)),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(height: 6),
-            Text(
-              value,
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
-            ),
-          ],
-        ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(height: 4),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white)),
+          Text(label,
+              style: const TextStyle(fontSize: 11, color: Colors.white70)),
+        ],
       ),
     );
   }
@@ -319,7 +452,8 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               decoration: BoxDecoration(
                 gradient: isSelected
-                    ? LinearGradient(colors: [AppTheme.primary, AppTheme.accent])
+                    ? const LinearGradient(
+                        colors: [AppTheme.primary, AppTheme.accent])
                     : null,
                 color: isSelected ? null : AppTheme.surface,
                 borderRadius: BorderRadius.circular(30),
@@ -327,7 +461,6 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
                   color: isSelected ? AppTheme.primary : AppTheme.border,
                   width: isSelected ? 0 : 0.8,
                 ),
-                boxShadow: isSelected ? AppTheme.subtleShadow : [],
               ),
               child: Text(
                 category,
@@ -344,30 +477,63 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildSearchChip() {
+  Widget _buildChecklistCard(Map<String, dynamic> checklist) {
+    final isDone = checklist['done'] as bool;
+    final items = checklist['items'] as List<String>;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: AppTheme.infoBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.info.withOpacity(0.3)),
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDone ? AppTheme.success.withValues(alpha: 0.3) : AppTheme.border,
+          width: 0.8,
+        ),
+        boxShadow: AppTheme.cardShadow,
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.search, size: 16, color: AppTheme.info),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Search: "$_searchQuery"',
-              style: const TextStyle(fontSize: 12, color: AppTheme.info),
+      child: ExpansionTile(
+        leading: GestureDetector(
+          onTap: () => setState(() => checklist['done'] = !checklist['done']),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              gradient: isDone
+                  ? const LinearGradient(
+                      colors: [AppTheme.success, AppTheme.successLight])
+                  : null,
+              color: isDone ? null : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isDone ? AppTheme.success : AppTheme.border,
+                width: 1.5,
+              ),
             ),
+            child: isDone
+                ? const Icon(Icons.check, color: Colors.white, size: 16)
+                : null,
           ),
-          GestureDetector(
-            onTap: () => setState(() => _searchQuery = ''),
-            child: const Icon(Icons.close, size: 16, color: AppTheme.info),
+        ),
+        title: Text(
+          checklist['title'],
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: isDone ? AppTheme.textMuted : AppTheme.textPrimary,
+            decoration: isDone ? TextDecoration.lineThrough : null,
           ),
-        ],
+        ),
+        subtitle: Text(
+          '${items.length} items',
+          style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+        ),
+        children: items.map((item) => ListTile(
+          dense: true,
+          leading: const Icon(Icons.circle_outlined, size: 12, color: AppTheme.textMuted),
+          title: Text(item, style: const TextStyle(fontSize: 13)),
+        )).toList(),
       ),
     );
   }
@@ -378,10 +544,16 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     final priority = task['priority'] as String;
     final dueDate = task['dueDate'] as String;
     final assignedBy = task['assignedBy'] as String;
+    final hasPhoto = task['hasPhoto'] as bool;
+    final hasVideo = task['hasVideo'] as bool;
+    final hasVoiceNote = task['hasVoiceNote'] as bool;
+    final notes = task['notes'] as String;
 
-    Color typeColor = type == 'Daily' ? AppTheme.info : 
-                     type == 'Weekly' ? AppTheme.success : 
-                     AppTheme.warning;
+    Color typeColor = type == 'Daily'
+        ? AppTheme.info
+        : type == 'Weekly'
+            ? AppTheme.success
+            : AppTheme.warning;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
@@ -390,71 +562,190 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
         color: AppTheme.surfaceCard,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: isDone ? AppTheme.success.withOpacity(0.3) : AppTheme.border,
+          color: isDone ? AppTheme.success.withValues(alpha: 0.3) : AppTheme.border,
           width: 0.8,
         ),
         boxShadow: AppTheme.cardShadow,
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
+      child: ExpansionTile(
+        leading: GestureDetector(
           onTap: () => _toggleTask(task),
-          borderRadius: BorderRadius.circular(18),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    gradient: isDone
-                        ? LinearGradient(colors: [AppTheme.success, AppTheme.successLight])
-                        : null,
-                    color: isDone ? null : Colors.transparent,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: isDone ? AppTheme.success : AppTheme.border,
-                      width: 1.5,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              gradient: isDone
+                  ? const LinearGradient(
+                      colors: [AppTheme.success, AppTheme.successLight])
+                  : null,
+              color: isDone ? null : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isDone ? AppTheme.success : AppTheme.border,
+                width: 1.5,
+              ),
+            ),
+            child: isDone
+                ? const Icon(Icons.check, color: Colors.white, size: 16)
+                : null,
+          ),
+        ),
+        title: Text(
+          task['title'],
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: isDone ? AppTheme.textMuted : AppTheme.textPrimary,
+            decoration: isDone ? TextDecoration.lineThrough : null,
+          ),
+        ),
+        subtitle: Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            _buildTypeBadge(type, typeColor),
+            if (priority == 'high') _buildPriorityBadge(),
+            _buildDueDateChip(dueDate),
+            _buildAssignedByChip(assignedBy),
+          ],
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasPhoto) const Icon(Icons.camera_alt, size: 14, color: AppTheme.info),
+            if (hasVideo) const Icon(Icons.videocam, size: 14, color: AppTheme.danger),
+            if (hasVoiceNote) const Icon(Icons.mic, size: 14, color: AppTheme.warning),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline, size: 20, color: AppTheme.primary),
+              onPressed: () => _showMediaOptions(task),
+            ),
+          ],
+        ),
+        children: [
+          if (notes.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.infoBg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.text_fields, size: 16, color: AppTheme.info),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      notes,
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
                     ),
                   ),
-                  child: isDone 
-                      ? const Icon(Icons.check, color: Colors.white, size: 16)
-                      : null,
+                ],
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildMediaButton(
+                  icon: Icons.camera_alt,
+                  label: 'Photo',
+                  isActive: hasPhoto,
+                  color: AppTheme.info,
+                  onTap: () => setState(() => task['hasPhoto'] = !task['hasPhoto']),
                 ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        task['title'],
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: isDone ? AppTheme.textMuted : AppTheme.textPrimary,
-                          decoration: isDone ? TextDecoration.lineThrough : null,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: [
-                          _buildTypeBadge(type, typeColor),
-                          if (priority == 'high') _buildPriorityBadge(),
-                          _buildDueDateChip(dueDate),
-                          _buildAssignedByChip(assignedBy),
-                        ],
-                      ),
-                    ],
-                  ),
+                _buildMediaButton(
+                  icon: Icons.videocam,
+                  label: 'Video',
+                  isActive: hasVideo,
+                  color: AppTheme.danger,
+                  onTap: () => setState(() => task['hasVideo'] = !task['hasVideo']),
                 ),
-                const Icon(Icons.chevron_right, color: AppTheme.textMuted, size: 20),
+                _buildMediaButton(
+                  icon: Icons.mic,
+                  label: 'Voice',
+                  isActive: hasVoiceNote,
+                  color: AppTheme.warning,
+                  onTap: () => setState(() => task['hasVoiceNote'] = !task['hasVoiceNote']),
+                ),
+                _buildMediaButton(
+                  icon: Icons.text_fields,
+                  label: 'Note',
+                  isActive: notes.isNotEmpty,
+                  color: AppTheme.success,
+                  onTap: () => _showTextNoteDialog(task),
+                ),
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMediaOption({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Container(
+            width: 60,
+            height: 60,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(icon, color: color, size: 28),
+          ),
+          const SizedBox(height: 8),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 12,
+                  color: color,
+                  fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMediaButton({
+    required IconData icon,
+    required String label,
+    required bool isActive,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive ? color.withValues(alpha: 0.15) : AppTheme.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isActive ? color : AppTheme.border,
+            width: isActive ? 1.5 : 0.8,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: isActive ? color : AppTheme.textMuted, size: 20),
+            const SizedBox(height: 4),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 10,
+                    color: isActive ? color : AppTheme.textMuted,
+                    fontWeight: FontWeight.w600)),
+          ],
         ),
       ),
     );
@@ -464,23 +755,26 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            type == 'Daily' ? Icons.today : 
-            type == 'Weekly' ? Icons.weekend : 
-            Icons.calendar_month,
+            type == 'Daily'
+                ? Icons.today
+                : type == 'Weekly'
+                    ? Icons.weekend
+                    : Icons.calendar_month,
             size: 12,
             color: color,
           ),
           const SizedBox(width: 4),
           Text(
             type,
-            style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600),
+            style: TextStyle(
+                fontSize: 10, color: color, fontWeight: FontWeight.w600),
           ),
         ],
       ),
@@ -494,12 +788,16 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
         color: AppTheme.dangerBg,
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
+      child: const Row(
         mainAxisSize: MainAxisSize.min,
-        children: const [
+        children: [
           Icon(Icons.priority_high, size: 12, color: AppTheme.danger),
           SizedBox(width: 4),
-          Text('High Priority', style: TextStyle(fontSize: 10, color: AppTheme.danger, fontWeight: FontWeight.w600)),
+          Text('High Priority',
+              style: TextStyle(
+                  fontSize: 10,
+                  color: AppTheme.danger,
+                  fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -510,13 +808,15 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: isUrgent ? AppTheme.warning.withOpacity(0.1) : AppTheme.surface,
+        color: isUrgent ? AppTheme.warning.withValues(alpha: 0.1) : AppTheme.surface,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.access_time, size: 10, color: isUrgent ? AppTheme.warning : AppTheme.textMuted),
+          Icon(Icons.access_time,
+              size: 10,
+              color: isUrgent ? AppTheme.warning : AppTheme.textMuted),
           const SizedBox(width: 4),
           Text(
             dueDate,
@@ -540,90 +840,11 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.person_outline, size: 10, color: AppTheme.textMuted),
+          const Icon(Icons.person_outline, size: 10, color: AppTheme.textMuted),
           const SizedBox(width: 4),
           Text(
             assignedBy,
             style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 60),
-      child: Column(
-        children: [
-          Container(
-            width: 100,
-            height: 100,
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceCard,
-              shape: BoxShape.circle,
-              border: Border.all(color: AppTheme.border),
-            ),
-            child: const Icon(Icons.task_alt, size: 48, color: AppTheme.textMuted),
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            'No tasks found',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _searchQuery.isNotEmpty 
-                ? 'No tasks match "$_searchQuery"'
-                : 'No ${_filter.toLowerCase()} tasks available',
-            style: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMotivationalCard() {
-    if (_doneCount == 0) return const SizedBox();
-    
-    String message;
-    IconData icon;
-    Color color;
-    
-    if (_completionPercentage >= 80) {
-      message = "Excellent! You're crushing your goals! 🎉";
-      icon = Icons.celebration;
-      color = AppTheme.success;
-    } else if (_completionPercentage >= 50) {
-      message = "Great progress! Keep up the momentum! 💪";
-      icon = Icons.rocket_launch;
-      color = AppTheme.info;
-    } else {
-      message = "You're on your way! Complete pending tasks to level up! 🚀";
-      icon = Icons.trending_up;
-      color = AppTheme.warning;
-    }
-    
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [color.withOpacity(0.1), color.withOpacity(0.05)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withOpacity(0.2)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              message,
-              style: TextStyle(fontSize: 12, color: color, height: 1.4),
-            ),
           ),
         ],
       ),
@@ -671,19 +892,20 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Filter Tasks', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Filter Tasks',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             ...['All', 'Daily', 'Weekly', 'Monthly'].map((filter) => ListTile(
-              leading: Radio<String>(
-                value: filter,
-                groupValue: _filter,
-                onChanged: (value) {
-                  setState(() => _filter = value!);
-                  Navigator.pop(context);
-                },
-              ),
-              title: Text(filter),
-            )).toList(),
+                  leading: Radio<String>(
+                    value: filter,
+                    groupValue: _filter,
+                    onChanged: (value) {
+                      setState(() => _filter = value!);
+                      Navigator.pop(context);
+                    },
+                  ),
+                  title: Text(filter),
+                )),
           ],
         ),
       ),

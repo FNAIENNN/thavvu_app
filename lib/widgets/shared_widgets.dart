@@ -27,12 +27,12 @@ class ModuleHeader extends StatelessWidget {
             height: 56,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [color.withOpacity(0.15), color.withOpacity(0.05)],
+                colors: [color.withValues(alpha: 0.15), color.withValues(alpha: 0.05)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-              border: Border.all(color: color.withOpacity(0.2)),
+              border: Border.all(color: color.withValues(alpha: 0.2)),
             ),
             child: Center(
               child: Text(emoji, style: const TextStyle(fontSize: 28)),
@@ -103,7 +103,7 @@ class SectionHeader extends StatelessWidget {
               onTap: onAction,
               child: Text(
                 actionText!,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                   color: AppTheme.primary,
@@ -154,7 +154,9 @@ class AppFormField extends StatelessWidget {
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
-        prefixIcon: icon != null ? Icon(icon, size: 18, color: AppTheme.textMuted) : null,
+        prefixIcon: icon != null
+            ? Icon(icon, size: 18, color: AppTheme.textMuted)
+            : null,
         filled: true,
         fillColor: AppTheme.surface,
         border: OutlineInputBorder(
@@ -169,7 +171,8 @@ class AppFormField extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppTheme.radiusSm),
           borderSide: const BorderSide(color: AppTheme.primary, width: 1.5),
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       ),
     );
   }
@@ -223,7 +226,9 @@ class SubmitButton extends StatelessWidget {
                     Icon(icon, size: 18),
                     const SizedBox(width: 8),
                   ],
-                  Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  Text(label,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
                 ],
               ),
       ),
@@ -244,16 +249,20 @@ class HodApprovalBadge extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppTheme.dangerBg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.danger.withOpacity(0.2)),
+        border: Border.all(color: AppTheme.danger.withValues(alpha: 0.2)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.warning_amber_rounded, size: 12, color: AppTheme.danger),
+          const Icon(Icons.warning_amber_rounded,
+              size: 12, color: AppTheme.danger),
           const SizedBox(width: 6),
           Text(
             text ?? 'HOD approval required',
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: AppTheme.danger),
+            style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: AppTheme.danger),
           ),
         ],
       ),
@@ -279,14 +288,15 @@ class NoteBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final boxColor = color ?? AppTheme.info;
-    final bgColor = color == AppTheme.warning ? AppTheme.warningBg : AppTheme.infoBg;
-    
+    final bgColor =
+        color == AppTheme.warning ? AppTheme.warningBg : AppTheme.infoBg;
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(color: boxColor.withOpacity(0.2)),
+        border: Border.all(color: boxColor.withValues(alpha: 0.2)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -341,7 +351,7 @@ class StepCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stepColor = color ?? AppTheme.info;
-    
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -360,7 +370,7 @@ class StepCard extends StatelessWidget {
                 height: 28,
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [stepColor, stepColor.withOpacity(0.8)],
+                    colors: [stepColor, stepColor.withValues(alpha: 0.8)],
                   ),
                   borderRadius: BorderRadius.circular(8),
                 ),
@@ -414,12 +424,12 @@ class StatsCard extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 12),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [color.withOpacity(0.08), color.withOpacity(0.03)],
+          colors: [color.withValues(alpha: 0.08), color.withValues(alpha: 0.03)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(color: color.withOpacity(0.15)),
+        border: Border.all(color: color.withValues(alpha: 0.15)),
       ),
       child: Column(
         children: [
@@ -519,7 +529,7 @@ class FilterChipWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selectedColor ?? AppTheme.primary;
-    
+
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -582,7 +592,9 @@ class StatusBadge extends StatelessWidget {
           children: [
             if (isSelected)
               Icon(
-                label == 'Received' ? Icons.check_circle : Icons.hourglass_empty,
+                label == 'Received'
+                    ? Icons.check_circle
+                    : Icons.hourglass_empty,
                 size: 16,
                 color: Colors.white,
               ),
@@ -620,7 +632,7 @@ class LoadingOverlay extends StatelessWidget {
         child,
         if (isLoading)
           Container(
-            color: Colors.black.withOpacity(0.3),
+            color: Colors.black.withValues(alpha: 0.3),
             child: const Center(
               child: CircularProgressIndicator(),
             ),

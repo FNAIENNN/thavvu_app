@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -9,7 +8,8 @@ class ReportsScreen extends StatefulWidget {
   State<ReportsScreen> createState() => _ReportsScreenState();
 }
 
-class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProviderStateMixin {
+class _ReportsScreenState extends State<ReportsScreen>
+    with SingleTickerProviderStateMixin {
   // State variables
   String _selectedReport = '';
   String _selectedPeriod = 'Monthly';
@@ -17,7 +17,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   bool _isGenerating = false;
   DateTime? _startDate;
   DateTime? _endDate;
-  
+
   // Controllers
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _stockPointController = TextEditingController();
@@ -26,20 +26,84 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
   // Report types data
   final List<Map<String, dynamic>> _reportTypes = [
-    {'emoji': '📊', 'title': 'Machines Summary', 'desc': 'Machine ID · Operator · Rate · Earned · Used · Balance', 'color': AppTheme.info, 'icon': Icons.construction},
-    {'emoji': '👷', 'title': 'Workers', 'desc': 'ID · Name · Earned · Used · Remaining balance', 'color': AppTheme.success, 'icon': Icons.people},
-    {'emoji': '🔑', 'title': 'Rental', 'desc': 'ID · Item · Start/End · Days · Earned · Used · Remaining', 'color': AppTheme.danger, 'icon': Icons.key},
-    {'emoji': '⛽', 'title': 'Diesel', 'desc': 'Batch ID · Total in · Consumed · Remaining', 'color': AppTheme.warning, 'icon': Icons.local_gas_station},
-    {'emoji': '↩️', 'title': 'Returns', 'desc': 'Batch ID · Machine · Days · Earned · Used', 'color': AppTheme.info, 'icon': Icons.assignment_return},
-    {'emoji': '🏍️', 'title': 'Site bikes petrol', 'desc': 'Bike ID · Petrol consumption', 'color': AppTheme.success, 'icon': Icons.two_wheeler},
+    {
+      'emoji': '📊',
+      'title': 'Machines Summary',
+      'desc': 'Machine ID · Operator · Rate · Earned · Used · Balance',
+      'color': AppTheme.info,
+      'icon': Icons.construction
+    },
+    {
+      'emoji': '👷',
+      'title': 'Workers',
+      'desc': 'ID · Name · Earned · Used · Remaining balance',
+      'color': AppTheme.success,
+      'icon': Icons.people
+    },
+    {
+      'emoji': '🔑',
+      'title': 'Rental',
+      'desc': 'ID · Item · Start/End · Days · Earned · Used · Remaining',
+      'color': AppTheme.danger,
+      'icon': Icons.key
+    },
+    {
+      'emoji': '⛽',
+      'title': 'Diesel',
+      'desc': 'Batch ID · Total in · Consumed · Remaining',
+      'color': AppTheme.warning,
+      'icon': Icons.local_gas_station
+    },
+    {
+      'emoji': '↩️',
+      'title': 'Returns',
+      'desc': 'Batch ID · Machine · Days · Earned · Used',
+      'color': AppTheme.info,
+      'icon': Icons.assignment_return
+    },
+    {
+      'emoji': '🏍️',
+      'title': 'Site bikes petrol',
+      'desc': 'Bike ID · Petrol consumption',
+      'color': AppTheme.success,
+      'icon': Icons.two_wheeler
+    },
   ];
 
   // Demo data for recent reports
   final List<Map<String, dynamic>> _recentReports = [
-    {'id': 'RPT-001', 'title': 'Machines Summary', 'date': DateTime(2024, 5, 13), 'size': '2.4 MB', 'type': 'PDF', 'status': 'completed'},
-    {'id': 'RPT-002', 'title': 'Workers Report', 'date': DateTime(2024, 5, 12), 'size': '1.8 MB', 'type': 'PDF', 'status': 'completed'},
-    {'id': 'RPT-003', 'title': 'Diesel Consumption', 'date': DateTime(2024, 5, 11), 'size': '1.2 MB', 'type': 'Excel', 'status': 'completed'},
-    {'id': 'RPT-004', 'title': 'Rental Summary', 'date': DateTime(2024, 5, 10), 'size': '892 KB', 'type': 'PDF', 'status': 'pending'},
+    {
+      'id': 'RPT-001',
+      'title': 'Machines Summary',
+      'date': DateTime(2024, 5, 13),
+      'size': '2.4 MB',
+      'type': 'PDF',
+      'status': 'completed'
+    },
+    {
+      'id': 'RPT-002',
+      'title': 'Workers Report',
+      'date': DateTime(2024, 5, 12),
+      'size': '1.8 MB',
+      'type': 'PDF',
+      'status': 'completed'
+    },
+    {
+      'id': 'RPT-003',
+      'title': 'Diesel Consumption',
+      'date': DateTime(2024, 5, 11),
+      'size': '1.2 MB',
+      'type': 'Excel',
+      'status': 'completed'
+    },
+    {
+      'id': 'RPT-004',
+      'title': 'Rental Summary',
+      'date': DateTime(2024, 5, 10),
+      'size': '892 KB',
+      'type': 'PDF',
+      'status': 'pending'
+    },
   ];
 
   @override
@@ -54,7 +118,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       curve: Curves.easeOut,
     );
     _animationController.forward();
-    
+
     // Initialize dates
     _startDate = DateTime.now().subtract(const Duration(days: 30));
     _endDate = DateTime.now();
@@ -69,8 +133,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   // Helper methods
-  int get _completedReportsCount => _recentReports.where((r) => r['status'] == 'completed').length;
-  int get _pendingReportsCount => _recentReports.where((r) => r['status'] == 'pending').length;
+  int get _completedReportsCount =>
+      _recentReports.where((r) => r['status'] == 'completed').length;
+  int get _pendingReportsCount =>
+      _recentReports.where((r) => r['status'] == 'pending').length;
 
   String _formatDate(DateTime? date) {
     if (date == null) return 'Select date';
@@ -80,7 +146,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _selectDate(BuildContext context, bool isStartDate) async {
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: isStartDate ? (_startDate ?? DateTime.now()) : (_endDate ?? DateTime.now()),
+      initialDate: isStartDate
+          ? (_startDate ?? DateTime.now())
+          : (_endDate ?? DateTime.now()),
       firstDate: DateTime(2020),
       lastDate: DateTime.now(),
       builder: (context, child) {
@@ -114,11 +182,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
 
     setState(() => _isGenerating = true);
-    
+
     // Simulate API call with realistic delay
     Future.delayed(const Duration(seconds: 2), () {
       setState(() => _isGenerating = false);
-      
+
       // Add to recent reports (simulated)
       final newReport = {
         'id': 'RPT-${DateTime.now().millisecondsSinceEpoch}',
@@ -128,7 +196,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         'type': _selectedFormat,
         'status': 'completed',
       };
-      
+
       _showSnackbar(
         '$_selectedReport report generated successfully!',
         AppTheme.success,
@@ -167,9 +235,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         content: Row(
           children: [
             Icon(
-              color == AppTheme.success ? Icons.check_circle :
-              color == AppTheme.warning ? Icons.warning :
-              Icons.info,
+              color == AppTheme.success
+                  ? Icons.check_circle
+                  : color == AppTheme.warning
+                      ? Icons.warning
+                      : Icons.info,
               color: Colors.white,
               size: 18,
             ),
@@ -235,7 +305,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               _buildStepSection(
                 number: '01',
                 title: 'Select Report Type',
-                subtitle: 'Choose from ${_reportTypes.length} report categories',
+                subtitle:
+                    'Choose from ${_reportTypes.length} report categories',
                 child: _buildReportTypesGrid(),
               ),
               const SizedBox(height: 24),
@@ -274,12 +345,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           height: 56,
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [AppTheme.primary.withOpacity(0.15), AppTheme.primary.withOpacity(0.05)],
+              colors: [
+                AppTheme.primary.withValues(alpha: 0.15),
+                AppTheme.primary.withValues(alpha: 0.05)
+              ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
+            border: Border.all(color: AppTheme.primary.withValues(alpha: 0.2)),
           ),
           alignment: Alignment.center,
           child: const Text('📊', style: TextStyle(fontSize: 28)),
@@ -291,7 +365,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             children: [
               Text(
                 'Reports & Analytics',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary),
               ),
               SizedBox(height: 4),
               Text(
@@ -309,7 +386,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           colors: [AppTheme.primary, AppTheme.accent],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -319,24 +396,33 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       ),
       child: Row(
         children: [
-          _buildStatOverviewItem('Reports', '${_recentReports.length}', Icons.description, Colors.white),
+          _buildStatOverviewItem('Reports', '${_recentReports.length}',
+              Icons.description, Colors.white),
           Container(width: 1, height: 40, color: Colors.white24),
-          _buildStatOverviewItem('Generated', '$_completedReportsCount', Icons.check_circle, Colors.white),
+          _buildStatOverviewItem('Generated', '$_completedReportsCount',
+              Icons.check_circle, Colors.white),
           Container(width: 1, height: 40, color: Colors.white24),
-          _buildStatOverviewItem('Pending', '$_pendingReportsCount', Icons.pending, Colors.white),
+          _buildStatOverviewItem(
+              'Pending', '$_pendingReportsCount', Icons.pending, Colors.white),
         ],
       ),
     );
   }
 
-  Widget _buildStatOverviewItem(String label, String value, IconData icon, Color color) {
+  Widget _buildStatOverviewItem(
+      String label, String value, IconData icon, Color color) {
     return Expanded(
       child: Column(
         children: [
           Icon(icon, size: 20, color: color),
           const SizedBox(height: 4),
-          Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-          Text(label, style: const TextStyle(fontSize: 10, color: Colors.white70)),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white)),
+          Text(label,
+              style: const TextStyle(fontSize: 10, color: Colors.white70)),
         ],
       ),
     );
@@ -357,20 +443,30 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                gradient: LinearGradient(
+                gradient: const LinearGradient(
                   colors: [AppTheme.primary, AppTheme.accent],
                 ),
                 borderRadius: BorderRadius.circular(10),
               ),
               alignment: Alignment.center,
-              child: Text(number, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+              child: Text(number,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white)),
             ),
             const SizedBox(width: 12),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
-                Text(subtitle, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary)),
+                Text(subtitle,
+                    style: const TextStyle(
+                        fontSize: 11, color: AppTheme.textMuted)),
               ],
             ),
           ],
@@ -396,7 +492,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final report = _reportTypes[index];
         final isSelected = _selectedReport == report['title'];
         final color = report['color'] as Color;
-        
+
         return GestureDetector(
           onTap: () => setState(() => _selectedReport = report['title']!),
           child: AnimatedContainer(
@@ -404,7 +500,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               gradient: isSelected
-                  ? LinearGradient(colors: [color, color.withOpacity(0.8)])
+                  ? LinearGradient(colors: [color, color.withValues(alpha: 0.8)])
                   : null,
               color: isSelected ? null : AppTheme.surfaceCard,
               borderRadius: BorderRadius.circular(16),
@@ -421,7 +517,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: isSelected ? Colors.white.withOpacity(0.2) : color.withOpacity(0.1),
+                    color: isSelected
+                        ? Colors.white.withValues(alpha: 0.2)
+                        : color.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   alignment: Alignment.center,
@@ -493,25 +591,34 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ],
           ),
           const SizedBox(height: 16),
-          _buildTextField('Name / ID', 'Filter by name or ID', Icons.search, _nameController),
+          _buildTextField('Name / ID', 'Filter by name or ID', Icons.search,
+              _nameController),
           const SizedBox(height: 16),
-          _buildTextField('Stock Point', 'Filter by location', Icons.location_on_outlined, _stockPointController),
+          _buildTextField('Stock Point', 'Filter by location',
+              Icons.location_on_outlined, _stockPointController),
           const SizedBox(height: 16),
-          const Text('Period Range', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: AppTheme.textSecondary)),
+          const Text('Period Range',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: AppTheme.textSecondary)),
           const SizedBox(height: 8),
           Wrap(
             spacing: 10,
             runSpacing: 10,
-            children: ['Daily', 'Weekly', 'Monthly', 'Quarterly', 'Yearly'].map((period) {
+            children: ['Daily', 'Weekly', 'Monthly', 'Quarterly', 'Yearly']
+                .map((period) {
               final isSelected = _selectedPeriod == period;
               return GestureDetector(
                 onTap: () => setState(() => _selectedPeriod = period),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: BoxDecoration(
                     gradient: isSelected
-                        ? LinearGradient(colors: [AppTheme.primary, AppTheme.accent])
+                        ? const LinearGradient(
+                            colors: [AppTheme.primary, AppTheme.accent])
                         : null,
                     color: isSelected ? null : AppTheme.surface,
                     borderRadius: BorderRadius.circular(30),
@@ -537,7 +644,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildDateField(String label, IconData icon, String value, VoidCallback onTap) {
+  Widget _buildDateField(
+      String label, IconData icon, String value, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -555,12 +663,17 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
-                  Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                  Text(label,
+                      style: const TextStyle(
+                          fontSize: 10, color: AppTheme.textMuted)),
+                  Text(value,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w500)),
                 ],
               ),
             ),
-            const Icon(Icons.arrow_drop_down, size: 20, color: AppTheme.textMuted),
+            const Icon(Icons.arrow_drop_down,
+                size: 20, color: AppTheme.textMuted),
           ],
         ),
       ),
@@ -595,13 +708,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(
+          borderSide: const BorderSide(
             color: AppTheme.border,
           ),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(
+          borderSide: const BorderSide(
             color: AppTheme.primary,
             width: 1.4,
           ),
@@ -626,7 +739,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Export Format', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: AppTheme.textSecondary)),
+          const Text('Export Format',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: AppTheme.textSecondary)),
           const SizedBox(height: 12),
           Wrap(
             spacing: 12,
@@ -637,10 +754,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 onTap: () => setState(() => _selectedFormat = format),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                   decoration: BoxDecoration(
                     gradient: isSelected
-                        ? LinearGradient(colors: [AppTheme.primary, AppTheme.accent])
+                        ? const LinearGradient(
+                            colors: [AppTheme.primary, AppTheme.accent])
                         : null,
                     color: isSelected ? null : AppTheme.surface,
                     borderRadius: BorderRadius.circular(30),
@@ -653,12 +772,16 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        format == 'PDF' ? Icons.picture_as_pdf_rounded :
-                        format == 'Excel' ? Icons.table_chart_rounded :
-                        format == 'CSV' ? Icons.dataset_outlined :
-                        Icons.print_rounded,
+                        format == 'PDF'
+                            ? Icons.picture_as_pdf_rounded
+                            : format == 'Excel'
+                                ? Icons.table_chart_rounded
+                                : format == 'CSV'
+                                    ? Icons.dataset_outlined
+                                    : Icons.print_rounded,
                         size: 16,
-                        color: isSelected ? Colors.white : AppTheme.textSecondary,
+                        color:
+                            isSelected ? Colors.white : AppTheme.textSecondary,
                       ),
                       const SizedBox(width: 8),
                       Text(
@@ -666,7 +789,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: isSelected ? Colors.white : AppTheme.textSecondary,
+                          color: isSelected
+                              ? Colors.white
+                              : AppTheme.textSecondary,
                         ),
                       ),
                     ],
@@ -691,7 +816,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
         gradient: isValid
-            ? LinearGradient(
+            ? const LinearGradient(
                 colors: [
                   AppTheme.primary,
                   AppTheme.accent,
@@ -704,7 +829,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         boxShadow: isValid
             ? [
                 BoxShadow(
-                  color: AppTheme.primary.withOpacity(0.35),
+                  color: AppTheme.primary.withValues(alpha: 0.35),
                   blurRadius: 18,
                   offset: const Offset(0, 8),
                 ),
@@ -778,14 +903,18 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
   Widget _buildRecentReports() {
     if (_recentReports.isEmpty) return const SizedBox();
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text('Recent Reports', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+            const Text('Recent Reports',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary)),
             TextButton(
               onPressed: () {},
               child: const Text('View All', style: TextStyle(fontSize: 11)),
@@ -793,7 +922,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           ],
         ),
         const SizedBox(height: 12),
-        ..._recentReports.take(3).map((report) => _buildRecentReportTile(report)),
+        ..._recentReports
+            .take(3)
+            .map((report) => _buildRecentReportTile(report)),
       ],
     );
   }
@@ -801,7 +932,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Widget _buildRecentReportTile(Map<String, dynamic> report) {
     final isPending = report['status'] == 'pending';
     final isPDF = report['type'] == 'PDF';
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
@@ -817,7 +948,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.1),
+              color: AppTheme.primary.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             alignment: Alignment.center,
@@ -834,16 +965,21 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               children: [
                 Row(
                   children: [
-                    Text(report['title'], style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text(report['title'],
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
                     if (isPending) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
                           color: AppTheme.warningBg,
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: const Text('Pending', style: TextStyle(fontSize: 9, color: AppTheme.warning)),
+                        child: const Text('Pending',
+                            style: TextStyle(
+                                fontSize: 9, color: AppTheme.warning)),
                       ),
                     ],
                   ],
@@ -851,7 +987,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 const SizedBox(height: 2),
                 Text(
                   '${_formatDate(report['date'])} • ${report['size']}',
-                  style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
+                  style:
+                      const TextStyle(fontSize: 10, color: AppTheme.textMuted),
                 ),
               ],
             ),
@@ -877,7 +1014,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       decoration: BoxDecoration(
         color: AppTheme.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border(
+        border: const Border(
           left: BorderSide(color: AppTheme.info, width: 3),
           top: BorderSide(color: AppTheme.border, width: 0.5),
           right: BorderSide(color: AppTheme.border, width: 0.5),
@@ -890,21 +1027,27 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: AppTheme.info.withOpacity(0.1),
+              color: AppTheme.info.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.lightbulb_outline, size: 18, color: AppTheme.info),
+            child: const Icon(Icons.lightbulb_outline,
+                size: 18, color: AppTheme.info),
           ),
           const SizedBox(width: 12),
           const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Pro Tip', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+                Text('Pro Tip',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary)),
                 SizedBox(height: 4),
                 Text(
                   'Reports can be exported in multiple formats. Use date filters to get accurate period-wise data. Schedule automatic reports for regular intervals.',
-                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.4),
+                  style: TextStyle(
+                      fontSize: 12, color: AppTheme.textSecondary, height: 1.4),
                 ),
               ],
             ),

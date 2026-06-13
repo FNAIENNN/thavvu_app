@@ -24,7 +24,7 @@ class PhotoCaptureCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppTheme.infoBg,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppTheme.info.withOpacity(0.25)),
+          border: Border.all(color: AppTheme.info.withValues(alpha: 0.25)),
         ),
         child: Row(
           children: [
@@ -32,7 +32,7 @@ class PhotoCaptureCard extends StatelessWidget {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: AppTheme.info.withOpacity(0.15),
+                color: AppTheme.info.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(10),
               ),
               alignment: Alignment.center,
@@ -62,7 +62,8 @@ class PhotoCaptureCard extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+            const Icon(Icons.arrow_forward_ios,
+                size: 14, color: AppTheme.textMuted),
           ],
         ),
       ),
