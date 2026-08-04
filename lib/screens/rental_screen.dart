@@ -1,7 +1,13 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
+import '../widgets/collapsible_tab_scaffold.dart';
+import '../services/attendance_context_service.dart';
+import '../services/rental_repository.dart';
 
 // =========================
 // Existing rental models
@@ -88,9 +94,61 @@ class MachineFuelLog {
   }
 }
 
+class RentalLineItem {
+  final String name;
+  final int quantity;
+  final double price;
+  final String rentUnit; // 'Per day' or 'Per hour'
+  final String equipmentType; // 'Machine Equipment' or 'Work Equipment'
+  final String category;
+
+  const RentalLineItem({
+    required this.name,
+    required this.quantity,
+    this.price = 0.0,
+    this.rentUnit = 'Per day',
+    this.equipmentType = 'Machine Equipment',
+    this.category = 'General',
+  });
+
+  double amountAt(double rate) => quantity * (price > 0 ? price : rate);
+  double get totalPrice => quantity * (price > 0 ? price : 0.0);
+}
+
+class RentalPaymentTransaction {
+  final String id;
+  final String type; // 'cash' | 'advance'
+  double amount;
+  final String method;
+  final DateTime date;
+  String status;
+  final String? note;
+  final String? billImagePath;
+  final String? machineId;
+  final String? machineName;
+  String? paymentProof;
+  bool registeredInMachineIdsBook;
+
+  RentalPaymentTransaction({
+    required this.id,
+    required this.type,
+    required this.amount,
+    required this.method,
+    required this.date,
+    this.status = 'Completed',
+    this.note,
+    this.billImagePath,
+    this.machineId,
+    this.machineName,
+    this.paymentProof,
+    this.registeredInMachineIdsBook = false,
+  });
+}
+
 class RentalItem {
   final String id;
   final String item;
+  final List<RentalLineItem> lineItems;
   final DateTime startDate;
   final double rate; // per day
   double advance;
@@ -102,15 +160,24 @@ class RentalItem {
   DateTime? tankEntryDate;
   List<DailyCheckIn> dailyCheckIns;
   List<MachineFuelLog> fuelLogs;
+  List<RentalPaymentTransaction> paymentTransactions;
   String? closingProofPath;
+  String? openingPhotoPath;
+  String? billPhotoPath;
   String siteName;
   String tankId;
   String fieldLabel;
   String operatorName;
+  String supplierName;
+  String villageName;
+  String equipmentType;
+  String billingUnit;
+  String paymentStatus;
 
   RentalItem({
     required this.id,
     required this.item,
+    List<RentalLineItem>? lineItems,
     required this.startDate,
     required this.rate,
     this.advance = 0,
@@ -122,20 +189,34 @@ class RentalItem {
     this.tankEntryDate,
     List<DailyCheckIn>? dailyCheckIns,
     List<MachineFuelLog>? fuelLogs,
+    List<RentalPaymentTransaction>? paymentTransactions,
     this.closingProofPath,
+    this.openingPhotoPath,
+    this.billPhotoPath,
     this.siteName = 'Site not assigned',
     this.tankId = 'Tank not assigned',
     this.fieldLabel = 'Field not assigned',
     this.operatorName = 'Operator not assigned',
-  })  : dailyCheckIns = dailyCheckIns ?? [],
-        fuelLogs = fuelLogs ?? [];
+    this.supplierName = 'Direct Supplier',
+    this.villageName = 'Local Village',
+    this.equipmentType = 'Machine Equipment',
+    this.billingUnit = 'Per day',
+    this.paymentStatus = 'Paid',
+  })  : lineItems = lineItems ?? [RentalLineItem(name: item, quantity: 1)],
+        dailyCheckIns = dailyCheckIns ?? [],
+        fuelLogs = fuelLogs ?? [],
+        paymentTransactions = paymentTransactions ?? [];
 
   double getEarnedAmount() {
     if (!isActivated || activationDate == null) return 0;
     final endDate = closingDate ?? DateTime.now();
-    final days = math.max(endDate.difference(activationDate!).inDays, 1).toDouble();
-    return days * rate;
+    final days =
+        math.max(endDate.difference(activationDate!).inDays, 1).toDouble();
+    return days * rate * totalQuantity;
   }
+
+  int get totalQuantity =>
+      lineItems.fold(0, (sum, item) => sum + item.quantity);
 
   double get fuelLogAmountTotal =>
       fuelLogs.fold(0, (sum, log) => sum + log.amount);
@@ -143,7 +224,8 @@ class RentalItem {
   double get fuelLogLitresTotal =>
       fuelLogs.fold(0, (sum, log) => sum + log.litres);
 
-  double get totalFuelCost => fuelLogs.isEmpty ? fuelConsumed : fuelLogAmountTotal;
+  double get totalFuelCost =>
+      fuelLogs.isEmpty ? fuelConsumed : fuelLogAmountTotal;
 
   MachineLifecycleStatus get machineStatus {
     if (closingDate != null) return MachineLifecycleStatus.closed;
@@ -243,10 +325,52 @@ class InternalTransferItem {
   bool get isPartial => returnedQty > 0 && remainingQty > 0;
 
   String get statusLabel {
-    if (isReturned) return 'Returned';
-    if (isPartial) return 'Partial';
-    return 'Running';
+    if (isReturned) return 'Fully Transferred';
+    if (isPartial) return 'Partial Transfer';
+    return 'Available';
   }
+}
+
+class InternalTransferHistoryRecord {
+  final String id;
+  final DateTime date;
+  final String thavvuId; // From Thavvu ID
+  final String toThavvuId; // To Thavvu ID
+  final String transferType;
+  final String itemName;
+  final String batchId;
+  final String rentalId;
+  final int numberOfItems;
+  final String transferredTo;
+  final String photoPath;
+  final String notes;
+  final String submittedBy;
+  String status; // 'Pending Receive', 'Received', 'Partial', 'Damaged', 'Rejected'
+  String? receiverName;
+  DateTime? receivedDate;
+  String? receiverNotes;
+  int? receivedQty;
+
+  InternalTransferHistoryRecord({
+    required this.id,
+    required this.date,
+    required this.thavvuId,
+    this.toThavvuId = '',
+    required this.transferType,
+    required this.itemName,
+    required this.batchId,
+    required this.rentalId,
+    required this.numberOfItems,
+    required this.transferredTo,
+    this.photoPath = '',
+    this.notes = '',
+    this.submittedBy = 'Supervisor',
+    this.status = 'Pending Receive',
+    this.receiverName,
+    this.receivedDate,
+    this.receiverNotes,
+    this.receivedQty,
+  });
 }
 
 // =========================
@@ -393,6 +517,101 @@ class VehicleRentalEntry {
   }
 }
 
+
+// =========================
+// Supplier payment models
+// =========================
+
+class SupplierPaymentItem {
+  final String id;
+  final String supplierName;
+  final String transferItemId;
+  final String itemName;
+  final String batchId;
+  final String rentalId;
+  final DateTime startDate;
+  final int takenQty;
+  int closedQty;
+  final double ratePerDay;
+  String paymentStatus;
+  String lastPaymentMethod;
+
+  SupplierPaymentItem({
+    required this.id,
+    required this.supplierName,
+    required this.transferItemId,
+    required this.itemName,
+    required this.batchId,
+    required this.rentalId,
+    required this.startDate,
+    required this.takenQty,
+    this.closedQty = 0,
+    required this.ratePerDay,
+    this.paymentStatus = 'Open',
+    this.lastPaymentMethod = 'Cash',
+  });
+
+  int get openQty => math.max(takenQty - closedQty, 0);
+
+  bool get isClosed => openQty == 0;
+
+  bool get isPartial => closedQty > 0 && openQty > 0;
+
+  String get statusLabel {
+    if (isClosed) return 'Closed';
+    if (isPartial) return 'Partial Open';
+    return 'Open';
+  }
+
+  double amountFor({
+    required int qty,
+    required DateTime endDate,
+  }) {
+    final days = math.max(endDate.difference(startDate).inDays, 1);
+    return qty * ratePerDay * days;
+  }
+}
+
+class SupplierPaymentHistoryRecord {
+  final String id;
+  final String supplierName;
+  final String itemName;
+  final String batchId;
+  final String rentalId;
+  final DateTime startDate;
+  final DateTime endDate;
+  final int closedQty;
+  final int remainingQty;
+  final double amount;
+  final String paymentMethod;
+  final String status;
+  final DateTime createdAt;
+  final String paymentReference;
+  final String noteType;
+  final String noteDetails;
+
+  const SupplierPaymentHistoryRecord({
+    required this.id,
+    required this.supplierName,
+    required this.itemName,
+    required this.batchId,
+    required this.rentalId,
+    required this.startDate,
+    required this.endDate,
+    required this.closedQty,
+    required this.remainingQty,
+    required this.amount,
+    required this.paymentMethod,
+    required this.status,
+    required this.createdAt,
+    this.paymentReference = '',
+    this.noteType = '',
+    this.noteDetails = '',
+  });
+
+  int get days => math.max(endDate.difference(startDate).inDays, 1);
+}
+
 class AquaRentalTool {
   final String id;
   final String name;
@@ -430,15 +649,95 @@ class _RentalScreenState extends State<RentalScreen>
   final GlobalKey<FormState> _openRentalFormKey = GlobalKey<FormState>();
 
   String _billingMode = 'Per day';
-  String _advancePaymentMode = 'Cash';
   bool _isOpening = false;
 
   final TextEditingController _itemController = TextEditingController();
+  final TextEditingController _itemQuantityController =
+      TextEditingController(text: '1');
+  final TextEditingController _itemPriceController = TextEditingController();
+  final TextEditingController _supplierNameController = TextEditingController();
+  final TextEditingController _villageNameController = TextEditingController();
+  String _selectedEquipmentType = 'Machine Equipment';
+  String _selectedItemRentUnit = 'Per day';
+  String _selectedItemCategory = 'Aeration';
   final TextEditingController _rateController = TextEditingController();
-  final TextEditingController _advanceAmountController =
-      TextEditingController();
   final TextEditingController _fuelController = TextEditingController();
+  final TextEditingController _fuelLitresController = TextEditingController();
+  final TextEditingController _fuelRemarksController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
+  final List<RentalLineItem> _draftRentalItems = [];
+  bool _rentalFuelEnabled = false;
+  bool _enableRentalCashPayment = false;
+  bool _enableCashPayment = false;
+  String _supplierPaymentNoteType = 'Manual Note';
+  final TextEditingController _supplierPaymentNoteController =
+      TextEditingController();
+  final Set<String> _selectedSupplierPaymentItemIds = <String>{};
+  final Map<String, int> _supplierPaymentCloseQtyDraft = <String, int>{};
+  final Map<String, Map<String, int>> _pendingSupplierPaymentPlans =
+      <String, Map<String, int>>{};
+  final Map<String, DateTime> _pendingSupplierPaymentPlanEndDates =
+      <String, DateTime>{};
+  final Map<String, String> _pendingSupplierPaymentPlanNoteTypes =
+      <String, String>{};
+  final Map<String, String> _pendingSupplierPaymentPlanNotes =
+      <String, String>{};
+  Map<String, int> _activeSupplierPaymentPlanQtyById = <String, int>{};
+  DateTime? _activeSupplierPaymentPlanEndDate;
+  String _activeSupplierPaymentPlanNoteType = 'Manual Note';
+  String _activeSupplierPaymentPlanNote = '';
+  String _rentalFuelType = 'Diesel';
+  String _rentalFuelStockPoint = 'Main Diesel Stock';
+  String? _rentalOpeningPhotoPath;
+  String? _rentalBillPhotoPath;
+  final List<RentalPaymentTransaction> _rentalPaymentLedger = [];
+
+  // ── Supabase backend integration ──────────────────────────────
+  final RentalRepository _rentalRepo = RentalRepository();
+  final AttendanceContextService _contextService = AttendanceContextService();
+  RealtimeChannel? _rentalChannel;
+  String _rentalSiteId = 'SITE-VJA-001';
+
+  // New advance payment state
+  bool _enableAdvancePayment = false;
+  String? _selectedAdvanceMode; // 'upi' or 'bank'
+  String? _selectedEntryMethod; // 'manual', 'photo', 'voice'
+  final TextEditingController _cashAmountController = TextEditingController();
+  final TextEditingController _advanceAmountController = TextEditingController();
+  final double _cashBalance = 50000;
+  final double _cashLimit = 25000;
+
+  // Account management
+  final List<Map<String, dynamic>> _savedAccounts = [
+    {
+      'id': 'acc1',
+      'upiId': 'aqua.supervisor@okhdfcbank',
+      'bankName': 'HDFC Bank',
+      'type': 'primary',
+    },
+    {
+      'id': 'acc2',
+      'upiId': 'pond.manager@ybl',
+      'bankName': 'Yes Bank',
+      'type': 'secondary',
+    },
+  ];
+  String? _selectedPaymentAccount;
+
+  final List<Map<String, dynamic>> _savedBankAccounts = [
+    {
+      'id': 'bank1',
+      'bankName': 'State Bank of India',
+      'accountNumber': '****1234',
+      'ifsc': 'SBIN0001234',
+      'holderName': 'Aqua Farm Supervisor',
+      'type': 'primary',
+    },
+  ];
+  String? _selectedBankAccount;
+  final TextEditingController _ifscController = TextEditingController();
+  final TextEditingController _accNumController = TextEditingController();
+  final TextEditingController _bankNameController = TextEditingController();
 
   final List<AquaRentalTool> _aquaToolCatalog = [];
   String? _selectedAquaToolId;
@@ -448,8 +747,25 @@ class _RentalScreenState extends State<RentalScreen>
 
   List<InternalTransferItem> _transferItems = [];
   InternalTransferItem? _selectedTransferItem;
-  String? _selectedTransferThavvuId;
+  String? _selectedTransferThavvuId; // From Thavvu ID
+  String? _toTransferThavvuId; // To Thavvu ID
   String? _selectedTransferTankId;
+  final Set<String> _selectedMachineTransferRentalIds = <String>{};
+  final Set<String> _confirmedMachineTransferRentalIds = <String>{};
+  String? _machineTransferPhotoPath;
+  final Map<String, int> _machineTransferQuantityDraft = <String, int>{};
+
+  String? _selectedWorkEquipmentBatchId;
+  String? _selectedWorkEquipmentItemId;
+  String? _workEquipmentPhotoPath;
+  DateTime? _internalTransferHistoryDateFilter;
+  final TextEditingController _workEquipmentQtyController =
+      TextEditingController(text: '1');
+  final TextEditingController _workEquipmentNotesController =
+      TextEditingController();
+  final TextEditingController _transferReceiverController =
+      TextEditingController(text: 'Supervisor / Department');
+  final List<InternalTransferHistoryRecord> _internalTransferHistory = [];
 
   final List<VehicleCatalogItem> _vehicleCatalog = [];
   late final Map<VehicleBillingType, TextEditingController>
@@ -458,26 +774,159 @@ class _RentalScreenState extends State<RentalScreen>
   final Map<VehicleBillingType, String?> _selectedVehicleThavvuIds = {};
   final List<VehicleRentalEntry> _vehicleEntries = [];
 
+
+  final List<SupplierPaymentItem> _supplierPaymentItems = [];
+  final List<SupplierPaymentHistoryRecord> _supplierPaymentHistory = [];
+  String? _selectedPaymentSupplier;
+  String _paymentView = 'Open';
+
+  // Supervisor reports filters — adapted from the React Reports pattern.
+  DateTime? _reportFromDateFilter;
+  DateTime? _reportToDateFilter;
+  String? _reportSupplierFilter;
+  String _reportSearch = '';
+  final TextEditingController _reportSearchController = TextEditingController();
+
+  // ---------- NEW: Custom supplier names ----------
+  List<String> _customSupplierNames = [];
+  final TextEditingController _newSupplierController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
     _vehicleUsageControllers = {
       for (final type in VehicleBillingType.values)
         type: TextEditingController(text: _defaultVehicleUsage(type)),
     };
     _loadMockData();
+    _seedSupplierPaymentItems();
     _seedVehicleSelections();
+    _newSupplierController.addListener(() { /* optional */ });
+    _initRentalBackend();
+  }
+
+  Future<void> _initRentalBackend() async {
+    final siteId = await _contextService.resolveSiteId();
+    if (!mounted) return;
+    _rentalSiteId = (siteId == null || siteId.isEmpty) ? 'SITE-VJA-001' : siteId;
+    _rentalChannel = _rentalRepo.watchAll(_rentalSiteId, _loadRentalData);
+    await _loadRentalData();
+  }
+
+  Future<void> _loadRentalData() async {
+    await _loadRentalEntries();
+    await _loadRentalPayments();
+  }
+
+  Future<void> _loadRentalPayments() async {
+    try {
+      final payments = await _rentalRepo.fetchPayments(siteId: _rentalSiteId);
+      if (!mounted) return;
+      setState(() {
+        for (final payment in payments) {
+          final exists = _rentalPaymentLedger
+              .any((txn) => txn.id == 'PAY-${payment.id}');
+          if (exists) continue;
+          _rentalPaymentLedger.insert(
+            0,
+            RentalPaymentTransaction(
+              id: 'PAY-${payment.id}',
+              type: payment.mode == 'cash' ? 'cash' : 'advance',
+              amount: payment.amount,
+              method: payment.mode,
+              date: DateTime.now(),
+              status: payment.status == 'paid' ? 'Completed' : 'Pending Review',
+              note: payment.note ?? 'Rental payment',
+              machineId: '',
+              machineName: payment.supplierName,
+            ),
+          );
+        }
+      });
+    } catch (_) {
+      // Payments are best-effort; local ledger still works.
+    }
+  }
+
+  Future<void> _loadRentalEntries() async {
+    try {
+      final entries = await _rentalRepo.fetchEntries(siteId: _rentalSiteId);
+      if (!mounted) return;
+      setState(() {
+        for (final entry in entries) {
+          final exists = _activeRentals.any(
+              (rental) => rental.id == 'ENT-${entry.entryNo}');
+          if (exists) continue;
+          _activeRentals.insert(
+            0,
+            RentalItem(
+              id: 'ENT-${entry.entryNo}',
+              item: entry.vehicleName,
+              lineItems: [
+                RentalLineItem(
+                    name: entry.vehicleName,
+                    quantity: entry.units.round(),
+                    price: entry.rate,
+                    rentUnit: entry.billingType),
+              ],
+              startDate: entry.workDate,
+              rate: entry.rate,
+              advance: 0,
+              fuelConsumed: entry.fuelCost,
+              notes: entry.notes ?? '',
+              openingPhotoPath: entry.openingPhotoPath,
+              billPhotoPath: entry.billPhotoPath,
+              siteName: 'Rental backend entry',
+              tankId: entry.tankId ?? 'Tank / pond pending',
+              fieldLabel: entry.fromLocation ?? '',
+              operatorName: entry.driver ?? '',
+              supplierName: 'Direct Supplier',
+              villageName: 'Local Village',
+              equipmentType: 'Machine Equipment',
+              billingUnit: entry.billingType,
+              paymentStatus: entry.status == 'approved'
+                  ? 'Approved'
+                  : (entry.status == 'rejected'
+                      ? 'Rejected'
+                      : 'Pending Review'),
+              isActivated: true,
+              activationDate: entry.workDate,
+              tankEntryDate: entry.workDate,
+            ),
+          );
+        }
+      });
+    } catch (_) {
+      // Backend is best-effort; local seed data still works.
+    }
   }
 
   @override
   void dispose() {
+    _rentalRepo.stopWatching(_rentalChannel);
     _tabController.dispose();
     _itemController.dispose();
+    _itemQuantityController.dispose();
+    _itemPriceController.dispose();
+    _supplierNameController.dispose();
+    _villageNameController.dispose();
     _rateController.dispose();
-    _advanceAmountController.dispose();
     _fuelController.dispose();
+    _fuelLitresController.dispose();
+    _fuelRemarksController.dispose();
     _notesController.dispose();
+    _cashAmountController.dispose();
+    _advanceAmountController.dispose();
+    _supplierPaymentNoteController.dispose();
+    _ifscController.dispose();
+    _accNumController.dispose();
+    _bankNameController.dispose();
+    _workEquipmentQtyController.dispose();
+    _workEquipmentNotesController.dispose();
+    _transferReceiverController.dispose();
+    _reportSearchController.dispose();
+    _newSupplierController.dispose();
     for (final controller in _vehicleUsageControllers.values) {
       controller.dispose();
     }
@@ -485,7 +934,7 @@ class _RentalScreenState extends State<RentalScreen>
   }
 
   // =========================
-  // Mock data
+  // Mock data (unchanged)
   // =========================
 
   void _loadMockData() {
@@ -609,9 +1058,13 @@ class _RentalScreenState extends State<RentalScreen>
         isActivated: true,
         activationDate: DateTime(2026, 5, 21),
         dailyCheckIns: [
-          DailyCheckIn(date: DateTime(2026, 5, 21), note: 'Machine entered Tank 11 and activated.'),
-          DailyCheckIn(date: DateTime(2026, 5, 22), note: 'Aerator running normally.'),
-          DailyCheckIn(date: DateTime(2026, 5, 23), note: 'Morning shift completed.'),
+          DailyCheckIn(
+              date: DateTime(2026, 5, 21),
+              note: 'Machine entered Tank 11 and activated.'),
+          DailyCheckIn(
+              date: DateTime(2026, 5, 22), note: 'Aerator running normally.'),
+          DailyCheckIn(
+              date: DateTime(2026, 5, 23), note: 'Morning shift completed.'),
         ],
         fuelLogs: [
           MachineFuelLog(
@@ -650,9 +1103,13 @@ class _RentalScreenState extends State<RentalScreen>
         isActivated: true,
         activationDate: DateTime(2026, 5, 26),
         dailyCheckIns: [
-          DailyCheckIn(date: DateTime(2026, 5, 26), note: 'Pump installed near exchange bay.'),
-          DailyCheckIn(date: DateTime(2026, 5, 27), note: 'Second shift continued.'),
-          DailyCheckIn(date: DateTime(2026, 5, 28), note: 'Outlet line checked.'),
+          DailyCheckIn(
+              date: DateTime(2026, 5, 26),
+              note: 'Pump installed near exchange bay.'),
+          DailyCheckIn(
+              date: DateTime(2026, 5, 27), note: 'Second shift continued.'),
+          DailyCheckIn(
+              date: DateTime(2026, 5, 28), note: 'Outlet line checked.'),
         ],
         fuelLogs: [
           MachineFuelLog(
@@ -706,7 +1163,9 @@ class _RentalScreenState extends State<RentalScreen>
         isActivated: true,
         activationDate: DateTime(2026, 5, 29),
         dailyCheckIns: [
-          DailyCheckIn(date: DateTime(2026, 5, 29), note: 'Net issued for harvest trial.'),
+          DailyCheckIn(
+              date: DateTime(2026, 5, 29),
+              note: 'Net issued for harvest trial.'),
         ],
       ),
     ];
@@ -1155,6 +1614,61 @@ class _RentalScreenState extends State<RentalScreen>
         notes: 'Cold-chain harvest transport.',
       ),
     ]);
+
+    _internalTransferHistory.addAll([
+      InternalTransferHistoryRecord(
+        id: 'ITH-REC-2026-001',
+        date: DateTime.now().subtract(const Duration(hours: 3)),
+        thavvuId: 'THV-BVRM-01',
+        toThavvuId: 'THV-KRS-09',
+        transferType: 'Machine Equipment',
+        itemName: '2 HP Paddle Wheel Aerator',
+        batchId: 'BATCH-REC-101',
+        rentalId: 'RNT-AP-2026-0034',
+        numberOfItems: 2,
+        transferredTo: 'Current Supervisor',
+        submittedBy: 'Supervisor Suresh Kumar',
+        photoPath: 'transfer_aerator_001.jpg',
+        notes: 'Transferred 2 aerator units for pond 9 oxygen support. Checked and operational.',
+        status: 'Pending Receive',
+      ),
+      InternalTransferHistoryRecord(
+        id: 'ITH-REC-2026-002',
+        date: DateTime.now().subtract(const Duration(days: 1)),
+        thavvuId: 'THV-WG-03',
+        toThavvuId: 'THV-KRS-09',
+        transferType: 'Work Equipment',
+        itemName: 'HDPE Aerator Float Set & PVC Hoses',
+        batchId: 'WE-BATCH-202',
+        rentalId: 'RNT-AP-2026-0035',
+        numberOfItems: 8,
+        transferredTo: 'Current Supervisor',
+        submittedBy: 'Supervisor Ramesh V.',
+        photoPath: 'transfer_floats_002.jpg',
+        notes: 'Float sets & hose bundle transferred after harvest completion.',
+        status: 'Pending Receive',
+      ),
+      InternalTransferHistoryRecord(
+        id: 'ITH-REC-2026-003',
+        date: DateTime.now().subtract(const Duration(days: 2)),
+        thavvuId: 'THV-KRS-02',
+        toThavvuId: 'THV-KRS-09',
+        transferType: 'Machine Equipment',
+        itemName: 'Diesel Water Pump 5 HP',
+        batchId: 'BATCH-REC-103',
+        rentalId: 'RNT-AP-2026-0036',
+        numberOfItems: 1,
+        transferredTo: 'Current Supervisor',
+        submittedBy: 'Supervisor Mahesh',
+        photoPath: 'transfer_pump_003.jpg',
+        notes: 'High volume pump transferred for pond filling cycle.',
+        status: 'Received',
+        receiverName: 'Supervisor (You)',
+        receivedDate: DateTime.now().subtract(const Duration(days: 1)),
+        receivedQty: 1,
+        receiverNotes: 'Received in excellent working condition. Deployed at Intake Bay.',
+      ),
+    ]);
   }
 
   void _seedVehicleSelections() {
@@ -1172,8 +1686,189 @@ class _RentalScreenState extends State<RentalScreen>
     }
   }
 
+
   // =========================
-  // Business helpers
+  // Supplier payment helpers
+  // =========================
+
+  void _seedSupplierPaymentItems() {
+    _supplierPaymentItems
+      ..clear()
+      ..addAll(_transferItems.map(_paymentItemFromTransferItem));
+    if (_supplierPaymentItems.isNotEmpty) {
+      _selectedPaymentSupplier = _supplierPaymentItems.first.supplierName;
+    }
+  }
+
+  SupplierPaymentItem _paymentItemFromTransferItem(InternalTransferItem item) {
+    final now = DateTime.now();
+    final ageDays = 3 + (item.id.hashCode.abs() % 18);
+    final baseRate = item.kind == TransferAssetKind.material ? 35.0 : 650.0;
+    final rateBump = (item.name.hashCode.abs() % 9) * 25.0;
+    return SupplierPaymentItem(
+      id: 'SPP-${item.id}',
+      supplierName: _supplierNameForTransferItem(item),
+      transferItemId: item.id,
+      itemName: item.name,
+      batchId: item.batchId,
+      rentalId: item.rentalId,
+      startDate: now.subtract(Duration(days: ageDays)),
+      takenQty: item.rentedQty,
+      closedQty: item.returnedQty,
+      ratePerDay: baseRate + rateBump,
+      paymentStatus: item.isReturned ? 'Closed' : 'Open',
+    );
+  }
+
+  String _supplierNameForTransferItem(InternalTransferItem item) {
+    final materialSuppliers = [
+      'Godavari Aqua Materials',
+      'Sri Lakshmi Farm Supplies',
+      'Coastal Stock Traders',
+    ];
+    final equipmentSuppliers = [
+      'Bhimavaram Machine Rentals',
+      'Delta Work Equipment',
+      'AP Aqua Tools & Motors',
+    ];
+    final source = item.kind == TransferAssetKind.material
+        ? materialSuppliers
+        : equipmentSuppliers;
+    return source[item.id.hashCode.abs() % source.length];
+  }
+
+  void _addSupplierPaymentItemForTransfer(InternalTransferItem item) {
+    final existingIndex = _supplierPaymentItems.indexWhere(
+      (paymentItem) => paymentItem.transferItemId == item.id,
+    );
+    final paymentItem = _paymentItemFromTransferItem(item);
+    if (existingIndex == -1) {
+      _supplierPaymentItems.insert(0, paymentItem);
+    } else {
+      _supplierPaymentItems[existingIndex] = paymentItem;
+    }
+    _selectedPaymentSupplier ??= paymentItem.supplierName;
+  }
+
+  void _syncSupplierPaymentFromTransfer(InternalTransferItem item) {
+    final index = _supplierPaymentItems.indexWhere(
+      (paymentItem) => paymentItem.transferItemId == item.id,
+    );
+    if (index == -1) {
+      _addSupplierPaymentItemForTransfer(item);
+      return;
+    }
+    final paymentItem = _supplierPaymentItems[index];
+    paymentItem.closedQty = item.returnedQty.clamp(0, item.rentedQty);
+    paymentItem.paymentStatus = paymentItem.isClosed ? 'Closed' : 'Open';
+  }
+
+  // ---------- UPDATED: combine payment items and custom names ----------
+  List<String> get _supplierNames {
+    final names = <String>{
+      ..._supplierPaymentItems.map((item) => item.supplierName),
+      ..._customSupplierNames,
+    }.where((name) => name.trim().isNotEmpty).toList()
+      ..sort();
+    return names;
+  }
+
+  // ---------- NEW: Add custom supplier ----------
+  void _addCustomSupplier(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    setState(() {
+      _customSupplierNames.add(trimmed);
+      // Automatically select the newly added supplier
+      _selectedPaymentSupplier = trimmed;
+    });
+    _newSupplierController.clear();
+  }
+
+  List<SupplierPaymentItem> get _visibleSupplierPaymentItems {
+    final supplier = _selectedPaymentSupplier;
+    if (supplier == null || supplier.isEmpty) return _supplierPaymentItems;
+    return _supplierPaymentItems
+        .where((item) => item.supplierName == supplier)
+        .toList()
+      ..sort((a, b) {
+        final statusCompare = a.statusLabel.compareTo(b.statusLabel);
+        if (statusCompare != 0) return statusCompare;
+        return a.itemName.compareTo(b.itemName);
+      });
+  }
+
+  Color _paymentStatusColor(SupplierPaymentItem item) {
+    if (item.isClosed) return AppTheme.success;
+    if (item.isPartial) return AppTheme.warning;
+    return AppTheme.info;
+  }
+
+  Color _paymentStatusBg(SupplierPaymentItem item) {
+    if (item.isClosed) return AppTheme.successBg;
+    if (item.isPartial) return AppTheme.warningBg;
+    return AppTheme.info.withOpacity(0.10);
+  }
+
+  double get _supplierPaymentOpenAmount {
+    final now = DateTime.now();
+    return _visibleSupplierPaymentItems.fold<double>(
+      0,
+      (sum, item) => sum + item.amountFor(qty: item.openQty, endDate: now),
+    );
+  }
+
+  int get _supplierOpenItemCount =>
+      _visibleSupplierPaymentItems.where((item) => !item.isClosed).length;
+
+  int get _supplierClosedItemCount =>
+      _visibleSupplierPaymentItems.where((item) => item.isClosed).length;
+
+  bool get _hasActiveSupplierPaymentPlan =>
+      _activeSupplierPaymentPlanQtyById.isNotEmpty;
+
+  List<SupplierPaymentItem> get _selectedSupplierPaymentItems {
+    final itemsById = {
+      for (final item in _visibleSupplierPaymentItems) item.id: item,
+    };
+    return _selectedSupplierPaymentItemIds
+        .where((id) => itemsById.containsKey(id))
+        .map((id) => itemsById[id]!)
+        .where((item) => !item.isClosed)
+        .toList();
+  }
+
+  int _draftCloseQtyForSupplierItem(SupplierPaymentItem item) {
+    final draft = _supplierPaymentCloseQtyDraft[item.id] ?? item.openQty;
+    return draft.clamp(1, item.openQty).toInt();
+  }
+
+  double get _supplierPaymentPlanAmount {
+    return _selectedSupplierPaymentItems.fold<double>(0, (sum, item) {
+      final qty = _draftCloseQtyForSupplierItem(item);
+      return sum + item.amountFor(qty: qty, endDate: DateTime.now());
+    });
+  }
+
+  int get _supplierPaymentPlanQuantity => _selectedSupplierPaymentItems.fold<int>(
+      0, (sum, item) => sum + _draftCloseQtyForSupplierItem(item));
+
+  void _clearActiveSupplierPaymentPlan() {
+    _activeSupplierPaymentPlanQtyById = <String, int>{};
+    _activeSupplierPaymentPlanEndDate = null;
+    _activeSupplierPaymentPlanNoteType = 'Manual Note';
+    _activeSupplierPaymentPlanNote = '';
+  }
+
+  void _clearSupplierPaymentSelection() {
+    _selectedSupplierPaymentItemIds.clear();
+    _supplierPaymentCloseQtyDraft.clear();
+    _supplierPaymentNoteController.clear();
+    _supplierPaymentNoteType = 'Manual Note';
+  }
+
+  // =========================
+  // Business helpers (unchanged)
   // =========================
 
   String _defaultVehicleUsage(VehicleBillingType type) {
@@ -1329,22 +2024,11 @@ class _RentalScreenState extends State<RentalScreen>
     _showSnackbar('${tool.name} added to the rental form.', AppTheme.success);
   }
 
-
   String? _firstId(List<String> values) {
     if (values.isEmpty) return null;
     return values.first;
   }
 
-  Map<String, List<InternalTransferItem>> _groupTransferItems(
-    TransferAssetKind kind,
-  ) {
-    final grouped = <String, List<InternalTransferItem>>{};
-    for (final item in _transferItems.where((e) => e.kind == kind)) {
-      final key = '${item.batchId}_${item.rentalId}';
-      grouped.putIfAbsent(key, () => []).add(item);
-    }
-    return grouped;
-  }
 
   int get _totalTransferRented =>
       _transferItems.fold(0, (sum, item) => sum + item.rentedQty);
@@ -1358,7 +2042,8 @@ class _RentalScreenState extends State<RentalScreen>
   double _vehicleAmount(VehicleBillingType type) {
     final selected = _selectedVehicles[type];
     if (selected == null) return 0;
-    final units = double.tryParse(_vehicleUsageControllers[type]?.text ?? '0') ?? 0;
+    final units =
+        double.tryParse(_vehicleUsageControllers[type]?.text ?? '0') ?? 0;
     return units * selected.rate;
   }
 
@@ -1374,9 +2059,7 @@ class _RentalScreenState extends State<RentalScreen>
   }
 
   List<VehicleRentalEntry> _vehicleEntriesForType(VehicleBillingType type) {
-    return _vehicleEntries
-        .where((entry) => entry.billingType == type)
-        .toList()
+    return _vehicleEntries.where((entry) => entry.billingType == type).toList()
       ..sort((a, b) => b.workDate.compareTo(a.workDate));
   }
 
@@ -1393,8 +2076,9 @@ class _RentalScreenState extends State<RentalScreen>
   int get _vehicleRunningCount =>
       _vehicleEntries.where((entry) => entry.status == 'Running').length;
 
-  int get _vehicleBillingPendingCount =>
-      _vehicleEntries.where((entry) => entry.status == 'Billing Pending').length;
+  int get _vehicleBillingPendingCount => _vehicleEntries
+      .where((entry) => entry.status == 'Billing Pending')
+      .length;
 
   Color _vehicleStatusColor(String status) {
     switch (status) {
@@ -1506,41 +2190,274 @@ class _RentalScreenState extends State<RentalScreen>
       return;
     }
 
+    final lineItems = _currentDraftRentalItems();
+    if (lineItems.isEmpty) {
+      _showSnackbar(
+          'Add at least one rental item with quantity.', AppTheme.warning);
+      return;
+    }
+
+    if (_rentalFuelEnabled) {
+      final amount = double.tryParse(_fuelController.text.trim()) ?? 0;
+      final litres = double.tryParse(_fuelLitresController.text.trim()) ?? 0;
+      if (amount <= 0 && litres <= 0) {
+        _showSnackbar(
+            'Enter fuel litres or amount, or turn fuel off.', AppTheme.warning);
+        return;
+      }
+    }
+
+    final cashAmount = _enableRentalCashPayment
+        ? (double.tryParse(_cashAmountController.text) ?? 0)
+        : 0.0;
+    final requestAmount = _enableAdvancePayment
+        ? (double.tryParse(_advanceAmountController.text) ?? 0)
+        : 0.0;
+
+    if (_enableRentalCashPayment) {
+      if (cashAmount <= 0 ||
+          cashAmount > _cashLimit ||
+          cashAmount > _cashBalance) {
+        _showSnackbar('Enter valid rental cash payment within HOD limit.',
+            AppTheme.warning);
+        return;
+      }
+    }
+
+    if (_enableAdvancePayment) {
+      if (requestAmount <= 0 || _selectedAdvanceMode == null) {
+        _showSnackbar('Enter advance request amount and payment method.',
+            AppTheme.warning);
+        return;
+      }
+      if (_selectedAdvanceMode == 'bank' && _selectedEntryMethod == null) {
+        _showSnackbar('Select bank request entry method.', AppTheme.warning);
+        return;
+      }
+    }
+
     setState(() => _isOpening = true);
 
     Future.delayed(const Duration(milliseconds: 700), () {
       if (!mounted) return;
+      final now = DateTime.now();
+      final itemLabel = lineItems.length == 1
+          ? lineItems.first.name
+          : '${lineItems.length} rental items';
+      final fuelAmount = _rentalFuelEnabled
+          ? (double.tryParse(_fuelController.text.trim()) ?? 0)
+          : 0.0;
+      final fuelLitres = _rentalFuelEnabled
+          ? (double.tryParse(_fuelLitresController.text.trim()) ?? 0)
+          : 0.0;
+      final advance = cashAmount + requestAmount;
+      final paymentTransactions = <RentalPaymentTransaction>[
+        if (cashAmount > 0)
+          RentalPaymentTransaction(
+            id: 'RCP-${now.millisecondsSinceEpoch}',
+            type: 'cash',
+            amount: cashAmount,
+            method: 'Cash Payment',
+            date: now,
+            note: 'Rental cash payment completed',
+            billImagePath: _rentalBillPhotoPath,
+            machineId: 'RNT-${now.millisecondsSinceEpoch}',
+            machineName: itemLabel,
+          ),
+        if (requestAmount > 0)
+          RentalPaymentTransaction(
+            id: 'RRP-${now.millisecondsSinceEpoch}',
+            type: 'advance',
+            amount: requestAmount,
+            method: _selectedAdvanceMode == 'upi' ? 'UPI' : 'Bank Transfer',
+            date: now,
+            status: 'Requested',
+            note: 'Rental advance request submitted',
+            billImagePath: _rentalBillPhotoPath,
+            machineId: 'RNT-${now.millisecondsSinceEpoch}',
+            machineName: itemLabel,
+          ),
+      ];
+
+      final supplierNameInput = _supplierNameController.text.trim();
+      final villageNameInput = _villageNameController.text.trim();
+      final calculatedTotalRate = lineItems.fold<double>(
+        0.0,
+        (sum, item) => sum + (item.price > 0 ? item.price * item.quantity : 0.0),
+      );
+      final finalRate = calculatedTotalRate > 0
+          ? calculatedTotalRate
+          : (double.tryParse(_rateController.text) ?? 0.0);
 
       final newRental = RentalItem(
-        id: 'RNT-${DateTime.now().millisecondsSinceEpoch}',
-        item: _itemController.text.trim(),
-        startDate: DateTime.now(),
-        rate: double.tryParse(_rateController.text) ?? 0,
-        advance: double.tryParse(_advanceAmountController.text) ?? 0,
-        fuelConsumed: double.tryParse(_fuelController.text) ?? 0,
+        id: 'RNT-${now.millisecondsSinceEpoch}',
+        item: itemLabel,
+        lineItems: lineItems,
+        startDate: now,
+        rate: finalRate,
+        advance: advance,
+        fuelConsumed: fuelAmount,
         notes: _notesController.text.trim(),
+        openingPhotoPath: _rentalOpeningPhotoPath,
+        billPhotoPath: _rentalBillPhotoPath,
         siteName: _selectedAquaTool?.district == null
             ? 'Aqua site not assigned'
             : '${_selectedAquaTool!.district} Aqua Site',
         tankId: 'Tank / pond pending',
         fieldLabel: 'Field pending',
         operatorName: 'Operator pending',
-        tankEntryDate: DateTime.now(),
-        isActivated: false,
+        supplierName:
+            supplierNameInput.isNotEmpty ? supplierNameInput : 'Direct Supplier',
+        villageName:
+            villageNameInput.isNotEmpty ? villageNameInput : 'Local Village',
+        equipmentType: _selectedEquipmentType,
+        billingUnit: _selectedItemRentUnit,
+        paymentStatus: advance > 0 ? 'Advance Paid' : 'Pending Payment',
+        tankEntryDate: now,
+        // Activate immediately — days auto-count from the moment machine enters field/tank
+        isActivated: true,
+        activationDate: now,
+        fuelLogs: _rentalFuelEnabled
+            ? [
+                MachineFuelLog(
+                  id: 'FUL-OPEN-${now.millisecondsSinceEpoch}',
+                  date: now,
+                  type: 'Opening ${_rentalFuelType.toLowerCase()}',
+                  litres: fuelLitres,
+                  amount: fuelAmount,
+                  meterReading: _rentalFuelStockPoint,
+                  notes: _fuelRemarksController.text.trim(),
+                ),
+              ]
+            : [],
+        paymentTransactions: paymentTransactions,
       );
 
       setState(() {
         _activeRentals.insert(0, newRental);
+        // Advance & payment data always visible in Payments ledger
+        _rentalPaymentLedger.insertAll(0, paymentTransactions);
         _isOpening = false;
       });
 
       _showSnackbar(
-        'Rental record opened for ${_itemController.text.trim()}',
+        '✅ $itemLabel added to Active Rentals. Days counting from today.',
         AppTheme.success,
       );
+      unawaited(_persistRentalEntry(
+        entry: newRental,
+        fuelLitres: fuelLitres,
+        fuelAmount: fuelAmount,
+      ));
       _clearOpenForm();
+      // Navigate to Active Rentals tab (index 1)
+      _tabController.animateTo(1);
     });
   }
+
+  Future<void> _persistRentalEntry({
+    required RentalItem entry,
+    required double fuelLitres,
+    required double fuelAmount,
+  }) async {
+    try {
+      final billing = entry.billingUnit.toLowerCase().contains('hour')
+          ? 'HOUR'
+          : (entry.billingUnit.toLowerCase().contains('week')
+              ? 'WEEKLY'
+              : 'DAY');
+      final fuelLines = <RentalFuelLine>[
+        if (fuelLitres > 0 || fuelAmount > 0)
+          RentalFuelLine(
+            id: '',
+            entryId: '',
+            fuelType: _rentalFuelType,
+            stockPoint: _rentalFuelStockPoint,
+            liters: fuelLitres,
+            amount: fuelAmount,
+            remarks: _fuelRemarksController.text.trim(),
+          ),
+      ];
+      final saved = await _rentalRepo.createEntry(
+        siteId: _rentalSiteId,
+        entryNo: 'RTL-${DateTime.now().millisecondsSinceEpoch}',
+        vehicleName: entry.item,
+        billingType: billing,
+        tankId: entry.tankId,
+        fromLocation: entry.fieldLabel,
+        driver: entry.operatorName,
+        workDate: DateTime.now(),
+        units:
+            entry.lineItems.fold<double>(0, (sum, item) => sum + item.quantity),
+        rate: entry.rate,
+        fuelCost: fuelAmount,
+        driverBata: 0,
+        loadingCharge: 0,
+        openingPhotoPath: entry.openingPhotoPath,
+        billPhotoPath: entry.billPhotoPath,
+        notes: entry.notes,
+        fuelLines: fuelLines,
+        thavvuPointId: await _contextService.resolvePointId(),
+      );
+      if (!mounted) return;
+      _loadRentalEntries();
+      if (saved.id.isNotEmpty) {
+        _showSnackbar('Rental synced to server for HOD review.',
+            AppTheme.success);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      _showSnackbar('Rental saved locally; server sync pending: $error',
+          AppTheme.warning);
+    }
+  }
+
+  Future<void> _persistRentalPayment({
+    required String supplierName,
+    required double amount,
+    required String mode,
+    String? note,
+  }) async {
+    try {
+      final saved = await _rentalRepo.createPayment(
+        siteId: _rentalSiteId,
+        supplierName: supplierName,
+        amount: amount,
+        mode: mode,
+        note: note,
+      );
+      if (!mounted) return;
+      _loadRentalPayments();
+      if (saved.id.isNotEmpty) {
+        _showSnackbar('Payment synced to server for HOD review.',
+            AppTheme.success);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      _showSnackbar('Payment saved locally; server sync pending: $error',
+          AppTheme.warning);
+    }
+  }
+
+  Future<void> _persistRentalReturn(RentalItem rental) async {
+    try {
+      await _rentalRepo.createReturn(
+        siteId: _rentalSiteId,
+        returnNo: 'RET-${DateTime.now().millisecondsSinceEpoch}',
+        itemName: rental.item,
+        workDate: DateTime.now(),
+        quantity: rental.lineItems
+            .fold<double>(0, (sum, item) => sum + item.quantity),
+        reason: 'Closed rental / returned by supervisor',
+        photoPath: rental.closingProofPath,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _showSnackbar('Return saved locally; server sync pending: $error',
+          AppTheme.warning);
+    }
+  }
+
 
   void _activateRental(RentalItem rental) {
     setState(() {
@@ -1569,7 +2486,8 @@ class _RentalScreenState extends State<RentalScreen>
 
   void _continueRental(RentalItem rental) {
     if (!rental.isActivated) {
-      _showSnackbar('Activate the machine before continuing the shift.', AppTheme.warning);
+      _showSnackbar('Activate the machine before continuing the shift.',
+          AppTheme.warning);
       return;
     }
 
@@ -1627,6 +2545,8 @@ class _RentalScreenState extends State<RentalScreen>
       _activeRentals.remove(rental);
     });
 
+    unawaited(_persistRentalReturn(rental));
+
     _showSnackbar('Rental ${rental.item} closed with proof.', AppTheme.success);
   }
 
@@ -1658,82 +2578,157 @@ class _RentalScreenState extends State<RentalScreen>
     );
   }
 
-  void _showRentalActions(RentalItem rental) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: Icon(
-                rental.isActivated
-                    ? Icons.play_circle_filled
-                    : Icons.play_circle_outline,
-                color: AppTheme.success,
-              ),
-              title: Text(
-                rental.isActivated ? 'Rental Active' : 'Activate Rental',
-              ),
-              subtitle: Text(
-                rental.isActivated
-                    ? 'Rent counting from ${_formatDate(rental.activationDate!)}'
-                    : 'Start rent counting from today',
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                if (!rental.isActivated) {
-                  _activateRental(rental);
-                } else {
-                  _showSnackbar('Rental already active', AppTheme.info);
-                }
-              },
-            ),
-            if (rental.isActivated)
-              ListTile(
-                leading: const Icon(Icons.today, color: AppTheme.warning),
-                title: const Text('Continue Rental'),
-                subtitle: Text(
-                  rental.isTodayChecked()
-                      ? 'Already verified today'
-                      : 'Mark rental as active for today',
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _continueRental(rental);
-                },
-              ),
-            ListTile(
-              leading: const Icon(Icons.close, color: AppTheme.danger),
-              title: const Text('Close Rental'),
-              subtitle: const Text('Upload proof and close this rental'),
-              onTap: () {
-                Navigator.pop(context);
-                _closeRentalWithProof(rental);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   void _clearOpenForm() {
     _itemController.clear();
+    _itemQuantityController.text = '1';
+    _itemPriceController.clear();
+    _supplierNameController.clear();
+    _villageNameController.clear();
     _rateController.clear();
-    _advanceAmountController.clear();
     _fuelController.clear();
+    _fuelLitresController.clear();
+    _fuelRemarksController.clear();
     _notesController.clear();
+    _cashAmountController.clear();
+    _advanceAmountController.clear();
+    _draftRentalItems.clear();
     _billingMode = 'Per day';
-    _advancePaymentMode = 'Cash';
+    _selectedEquipmentType = 'Machine Equipment';
+    _selectedItemRentUnit = 'Per day';
+    _enableRentalCashPayment = false;
+    _enableCashPayment = false;
+    _enableAdvancePayment = false;
+    _selectedAdvanceMode = null;
+    _selectedEntryMethod = null;
+    _selectedPaymentAccount = null;
+    _selectedBankAccount = null;
+    _ifscController.clear();
+    _accNumController.clear();
+    _bankNameController.clear();
+    _rentalFuelEnabled = false;
+    _rentalFuelType = 'Diesel';
+    _rentalFuelStockPoint = 'Main Diesel Stock';
+    _rentalOpeningPhotoPath = null;
+    _rentalBillPhotoPath = null;
     _selectedAquaToolId = null;
     _openRentalFormKey.currentState?.reset();
   }
 
+  List<RentalLineItem> _currentDraftRentalItems() {
+    final items = List<RentalLineItem>.from(_draftRentalItems);
+    final typedName = _itemController.text.trim();
+    final typedQuantity =
+        int.tryParse(_itemQuantityController.text.trim()) ?? 0;
+    final typedPrice =
+        double.tryParse(_itemPriceController.text.trim()) ?? 0.0;
+    if (typedName.isNotEmpty && typedQuantity > 0) {
+      final existingIndex = items.indexWhere(
+        (item) => item.name.toLowerCase() == typedName.toLowerCase(),
+      );
+      if (existingIndex == -1) {
+        items.add(
+          RentalLineItem(
+            name: typedName,
+            quantity: typedQuantity,
+            price: typedPrice,
+            rentUnit: _selectedItemRentUnit,
+            equipmentType: _selectedEquipmentType,
+            category: _selectedItemCategory,
+          ),
+        );
+      }
+    }
+    return items;
+  }
+
+  void _addDraftRentalItem() {
+    final name = _itemController.text.trim();
+    final quantity = int.tryParse(_itemQuantityController.text.trim()) ?? 0;
+    final price = double.tryParse(_itemPriceController.text.trim()) ?? 0.0;
+    if (name.isEmpty || quantity <= 0) {
+      _showSnackbar('Enter item name and quantity.', AppTheme.warning);
+      return;
+    }
+    setState(() {
+      final existingIndex = _draftRentalItems.indexWhere(
+        (item) =>
+            item.name.toLowerCase() == name.toLowerCase() &&
+            item.equipmentType == _selectedEquipmentType,
+      );
+      if (existingIndex == -1) {
+        _draftRentalItems.add(
+          RentalLineItem(
+            name: name,
+            quantity: quantity,
+            price: price,
+            rentUnit: _selectedItemRentUnit,
+            equipmentType: _selectedEquipmentType,
+            category: _selectedItemCategory,
+          ),
+        );
+      } else {
+        final existing = _draftRentalItems[existingIndex];
+        _draftRentalItems[existingIndex] = RentalLineItem(
+          name: existing.name,
+          quantity: existing.quantity + quantity,
+          price: price > 0 ? price : existing.price,
+          rentUnit: _selectedItemRentUnit,
+          equipmentType: _selectedEquipmentType,
+          category: _selectedItemCategory,
+        );
+      }
+      _itemController.clear();
+      _itemQuantityController.text = '1';
+      _itemPriceController.clear();
+    });
+  }
+
+  void _removeDraftRentalItem(RentalLineItem item) {
+    setState(() => _draftRentalItems.remove(item));
+  }
+
+  Future<void> _toggleRentalUpload(String type) async {
+    final picker = ImagePicker();
+    final XFile? shot;
+    try {
+      shot = await picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 80,
+      );
+    } catch (_) {
+      _showSnackbar('Camera is unavailable.', AppTheme.danger);
+      return;
+    }
+    if (shot == null) return;
+
+    final bytes = await shot.readAsBytes();
+    final ext = shot.name.contains('.')
+        ? shot.name.split('.').last.toLowerCase()
+        : 'jpg';
+    final context = type == 'opening_photo' ? 'opening' : 'bill';
+    final path = await _rentalRepo.uploadPhoto(
+        bytes: bytes, extension: ext, context: context);
+    if (!mounted) return;
+    setState(() {
+      if (type == 'opening_photo') {
+        _rentalOpeningPhotoPath = path;
+      } else {
+        _rentalBillPhotoPath = path;
+      }
+    });
+    _showSnackbar(
+      path != null
+          ? (type == 'opening_photo'
+              ? 'Opening photo captured & uploaded'
+              : 'Bill photo captured & uploaded')
+          : 'Photo upload failed',
+      path != null ? AppTheme.success : AppTheme.danger,
+    );
+  }
+
   // =========================
-  // New internal transfer actions
+  // Internal transfer actions (unchanged)
   // =========================
 
   void _selectTransferItem(
@@ -1744,20 +2739,560 @@ class _RentalScreenState extends State<RentalScreen>
       _selectedTransferItem = item;
       _selectedTransferThavvuId = _firstId(item.thavvuIds);
       _selectedTransferTankId = _firstId(item.tankIds);
+      if (item.kind == TransferAssetKind.workEquipment) {
+        _selectedWorkEquipmentBatchId = item.batchId;
+        _selectedWorkEquipmentItemId = item.id;
+      }
     });
 
     if (showSnack) {
       _showSnackbar(
-        '${item.name} selected. Thavvu ID and Tank ID loaded.',
+        '${item.name} selected. Thavvu ID loaded first for transfer.',
         AppTheme.info,
       );
     }
+  }
+
+  List<String> get _allInternalTransferThavvuIds {
+    final ids = <String>{};
+
+    for (final item in _transferItems) {
+      ids.addAll(item.thavvuIds.where((id) => id.trim().isNotEmpty));
+    }
+
+    for (final vehicle in _vehicleCatalog) {
+      ids.addAll(vehicle.thavvuIds.where((id) => id.trim().isNotEmpty));
+    }
+
+    for (final rental in _activeRentals) {
+      if (rental.id.trim().isNotEmpty) {
+        ids.add('THV-${rental.id}');
+      }
+      if (rental.tankId.trim().isNotEmpty) {
+        ids.add('THV-${rental.tankId}');
+      }
+    }
+
+    final sorted = ids.toList()..sort();
+    return sorted;
+  }
+
+  void _selectPriorityThavvu(String? thavvuId) {
+    setState(() {
+      _selectedTransferThavvuId = thavvuId;
+
+      final allIds = _allInternalTransferThavvuIds;
+      if (_toTransferThavvuId == null ||
+          _toTransferThavvuId == thavvuId ||
+          !allIds.contains(_toTransferThavvuId)) {
+        final targetOptions = allIds.where((id) => id != thavvuId).toList();
+        _toTransferThavvuId =
+            targetOptions.isEmpty ? null : targetOptions.first;
+      }
+
+      final matching = _transferItems.where((item) {
+        if (thavvuId == null) return false;
+        return item.thavvuIds.contains(thavvuId);
+      }).toList();
+
+      if (matching.isNotEmpty) {
+        _selectedTransferItem = matching.first;
+        _selectedTransferTankId = _firstId(matching.first.tankIds);
+      } else {
+        _selectedTransferItem = null;
+        _selectedTransferTankId = null;
+      }
+
+      final weMatch = matching
+          .where((item) => item.kind == TransferAssetKind.workEquipment)
+          .toList();
+
+      if (weMatch.isNotEmpty) {
+        _selectedWorkEquipmentBatchId = weMatch.first.batchId;
+        _selectedWorkEquipmentItemId = weMatch.first.id;
+      } else {
+        _selectedWorkEquipmentBatchId = null;
+        _selectedWorkEquipmentItemId = null;
+      }
+    });
+  }
+
+  void _selectToTransferThavvu(String? thavvuId) {
+    if (thavvuId != null && thavvuId == _selectedTransferThavvuId) {
+      _showSnackbar(
+        'From Thavvu ID and To Thavvu ID cannot be the same.',
+        AppTheme.warning,
+      );
+      return;
+    }
+    setState(() => _toTransferThavvuId = thavvuId);
+  }
+
+  List<InternalTransferItem> _transferItemsForKindByThavvu(
+    TransferAssetKind kind,
+  ) {
+    final selectedThavvu = _selectedTransferThavvuId;
+    return _transferItems.where((item) {
+      if (item.kind != kind) return false;
+      if (selectedThavvu == null || selectedThavvu.trim().isEmpty) {
+        return true;
+      }
+      return item.thavvuIds.contains(selectedThavvu);
+    }).toList();
+  }
+
+  Map<String, List<InternalTransferItem>> _groupTransferItemsByThavvu(
+    TransferAssetKind kind,
+  ) {
+    final grouped = <String, List<InternalTransferItem>>{};
+    for (final item in _transferItemsForKindByThavvu(kind)) {
+      final key = '${item.batchId}_${item.rentalId}';
+      grouped.putIfAbsent(key, () => []).add(item);
+    }
+    return grouped;
+  }
+
+  List<InternalTransferItem> get _workEquipmentItemsForSelectedThavvu {
+    return _transferItemsForKindByThavvu(TransferAssetKind.workEquipment)
+      ..sort((a, b) {
+        final batchCompare = a.batchId.compareTo(b.batchId);
+        if (batchCompare != 0) return batchCompare;
+        return a.name.compareTo(b.name);
+      });
+  }
+
+  List<String> get _workEquipmentBatchIds {
+    final batches = _workEquipmentItemsForSelectedThavvu
+        .map((item) => item.batchId)
+        .toSet()
+        .toList()
+      ..sort();
+    return batches;
+  }
+
+  List<InternalTransferItem> get _workEquipmentItemsForSelectedBatch {
+    final batches = _workEquipmentBatchIds;
+    final selectedBatch = _selectedWorkEquipmentBatchId ??
+        (batches.isNotEmpty ? batches.first : null);
+
+    if (selectedBatch == null) return [];
+
+    return _workEquipmentItemsForSelectedThavvu
+        .where((item) => item.batchId == selectedBatch)
+        .toList();
+  }
+
+  InternalTransferItem? get _selectedWorkEquipmentTransferItem {
+    final items = _workEquipmentItemsForSelectedBatch;
+    if (items.isEmpty) return null;
+
+    for (final item in items) {
+      if (item.id == _selectedWorkEquipmentItemId) {
+        return item;
+      }
+    }
+
+    return items.first;
+  }
+
+  int get _workEquipmentTransferQty {
+    final parsed = int.tryParse(_workEquipmentQtyController.text.trim()) ?? 1;
+    return parsed.clamp(1, 999999).toInt();
+  }
+
+  void _selectWorkEquipmentBatch(String? batchId) {
+    setState(() {
+      _selectedWorkEquipmentBatchId = batchId;
+      final items = _workEquipmentItemsForSelectedBatch;
+      _selectedWorkEquipmentItemId = items.isEmpty ? null : items.first.id;
+      _workEquipmentQtyController.text = '1';
+      _workEquipmentPhotoPath = null;
+      _workEquipmentNotesController.clear();
+    });
+  }
+
+  void _changeWorkEquipmentTransferQty(int delta) {
+    final item = _selectedWorkEquipmentTransferItem;
+    if (item == null) return;
+    final available = math.max(item.remainingQty, 1);
+    final current = _workEquipmentTransferQty;
+    final next = (current + delta).clamp(1, available).toInt();
+    setState(() => _workEquipmentQtyController.text = next.toString());
+  }
+
+  void _attachWorkEquipmentTransferPhoto() {
+    setState(() {
+      _workEquipmentPhotoPath =
+          'we_transfer_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    });
+    _showSnackbar(
+      'Photo attached for work equipment transfer.',
+      AppTheme.success,
+    );
+  }
+
+  void _submitWorkEquipmentTransfer() {
+    final thavvuId = _selectedTransferThavvuId;
+    final targetThavvu = _toTransferThavvuId;
+    final item = _selectedWorkEquipmentTransferItem;
+
+    if (thavvuId == null || thavvuId.trim().isEmpty) {
+      _showSnackbar(
+        'Select From Thavvu ID first before transferring work equipment.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (targetThavvu == null || targetThavvu.trim().isEmpty) {
+      _showSnackbar(
+        'Select To Thavvu ID before transferring work equipment.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (thavvuId == targetThavvu) {
+      _showSnackbar(
+        'From Thavvu ID and To Thavvu ID cannot be the same.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (item == null) {
+      _showSnackbar(
+        'Select work equipment batch and item.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (_workEquipmentPhotoPath == null || _workEquipmentPhotoPath!.trim().isEmpty) {
+      _showSnackbar(
+        'Upload photo proof before submitting work equipment transfer.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    final qty = _workEquipmentTransferQty;
+    if (qty <= 0 || qty > item.remainingQty) {
+      _showSnackbar(
+        'Number of items cannot exceed remaining quantity: ${item.remainingQty}.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    final receiver = _transferReceiverController.text.trim().isEmpty
+        ? 'Supervisor / Department'
+        : _transferReceiverController.text.trim();
+
+    setState(() {
+      item.returnedQty = (item.returnedQty + qty).clamp(0, item.rentedQty);
+      _internalTransferHistory.insert(
+        0,
+        InternalTransferHistoryRecord(
+          id: 'ITH-${DateTime.now().millisecondsSinceEpoch}',
+          date: DateTime.now(),
+          thavvuId: thavvuId,
+          toThavvuId: targetThavvu,
+          transferType: 'Work Equipment',
+          itemName: item.name,
+          batchId: item.batchId,
+          rentalId: item.rentalId,
+          numberOfItems: qty,
+          transferredTo: receiver,
+          photoPath: _workEquipmentPhotoPath ?? '',
+          notes: _workEquipmentNotesController.text.trim(),
+        ),
+      );
+      _workEquipmentQtyController.text = '1';
+      _workEquipmentNotesController.clear();
+      _workEquipmentPhotoPath = null;
+    });
+
+    _showSnackbar(
+      'Submit Transfer completed. Work equipment moved from $thavvuId to $targetThavvu.',
+      AppTheme.success,
+    );
+  }
+
+  List<RentalItem> get _activeMachinesForInternalTransfer {
+    return _activeRentals
+        .where((rental) => rental.isActivated && rental.closingDate == null)
+        .toList()
+      ..sort((a, b) => b.startDate.compareTo(a.startDate));
+  }
+
+  int _availableMachineTransferQty(RentalItem rental) {
+    return math.max(rental.totalQuantity, 1);
+  }
+
+  int _selectedMachineTransferQty(RentalItem rental) {
+    final available = _availableMachineTransferQty(rental);
+    final draft = _machineTransferQuantityDraft[rental.id] ?? 1;
+    return draft.clamp(1, available).toInt();
+  }
+
+  void _toggleMachineTransferSelection(RentalItem rental, bool? selected) {
+    setState(() {
+      if (selected == true) {
+        _selectedMachineTransferRentalIds.add(rental.id);
+        _machineTransferQuantityDraft[rental.id] =
+            _selectedMachineTransferQty(rental);
+        _confirmedMachineTransferRentalIds.remove(rental.id);
+      } else {
+        _selectedMachineTransferRentalIds.remove(rental.id);
+        _confirmedMachineTransferRentalIds.remove(rental.id);
+        _machineTransferQuantityDraft.remove(rental.id);
+      }
+    });
+  }
+
+  void _changeMachineTransferQty(RentalItem rental, int delta) {
+    final available = _availableMachineTransferQty(rental);
+    final current = _selectedMachineTransferQty(rental);
+    setState(() {
+      _machineTransferQuantityDraft[rental.id] =
+          (current + delta).clamp(1, available).toInt();
+      _selectedMachineTransferRentalIds.add(rental.id);
+      _confirmedMachineTransferRentalIds.remove(rental.id);
+    });
+  }
+
+  int get _selectedMachineTransferCount =>
+      _selectedMachineTransferRentalIds.length;
+
+  int get _selectedMachineTransferTotalQty {
+    return _activeMachinesForInternalTransfer
+        .where((rental) => _selectedMachineTransferRentalIds.contains(rental.id))
+        .fold<int>(0, (sum, rental) => sum + _selectedMachineTransferQty(rental));
+  }
+
+  List<RentalItem> get _selectedMachineTransferRentals {
+    return _activeMachinesForInternalTransfer
+        .where((rental) => _selectedMachineTransferRentalIds.contains(rental.id))
+        .toList()
+      ..sort((a, b) => a.item.compareTo(b.item));
+  }
+
+  int get _confirmedMachineTransferCount {
+    return _selectedMachineTransferRentals
+        .where((rental) => _confirmedMachineTransferRentalIds.contains(rental.id))
+        .length;
+  }
+
+  bool get _allSelectedMachinesConfirmed {
+    final selected = _selectedMachineTransferRentals;
+    return selected.isNotEmpty &&
+        selected.every(
+          (rental) => _confirmedMachineTransferRentalIds.contains(rental.id),
+        );
+  }
+
+  void _toggleMachineTransferConfirmation(RentalItem rental, bool? confirmed) {
+    if (!_selectedMachineTransferRentalIds.contains(rental.id)) return;
+    setState(() {
+      if (confirmed == true) {
+        _confirmedMachineTransferRentalIds.add(rental.id);
+      } else {
+        _confirmedMachineTransferRentalIds.remove(rental.id);
+      }
+    });
+  }
+
+  void _attachMachineTransferPhoto() {
+    setState(() {
+      _machineTransferPhotoPath =
+          'machine_transfer_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    });
+    _showSnackbar(
+      'Photo attached for machine transfer.',
+      AppTheme.success,
+    );
+  }
+
+  void _submitMachineTransferSelection() {
+    final selectedThavvu = _selectedTransferThavvuId;
+    final targetThavvu = _toTransferThavvuId;
+    final selectedRentals = _activeMachinesForInternalTransfer
+        .where((rental) => _selectedMachineTransferRentalIds.contains(rental.id))
+        .toList();
+
+    if (selectedThavvu == null || selectedThavvu.trim().isEmpty) {
+      _showSnackbar(
+        'Select From Thavvu ID first before submitting machine transfer.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (targetThavvu == null || targetThavvu.trim().isEmpty) {
+      _showSnackbar(
+        'Select To Thavvu ID before submitting machine transfer.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (selectedThavvu == targetThavvu) {
+      _showSnackbar(
+        'From Thavvu ID and To Thavvu ID cannot be the same.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (_machineTransferPhotoPath == null || _machineTransferPhotoPath!.trim().isEmpty) {
+      _showSnackbar(
+        'Upload photo proof before submitting machine transfer.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (selectedRentals.isEmpty) {
+      _showSnackbar(
+        'Select at least one active machine before submitting transfer.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    if (!_allSelectedMachinesConfirmed) {
+      _showSnackbar(
+        'Check and confirm every selected machine in the selected machines table before proceeding.',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    final receiver = _transferReceiverController.text.trim().isEmpty
+        ? 'Supervisor / Department'
+        : _transferReceiverController.text.trim();
+
+    setState(() {
+      for (final rental in selectedRentals) {
+        final qty = _selectedMachineTransferQty(rental);
+        final existingIndex = _transferItems.indexWhere(
+          (item) => item.id == 'MS-${rental.id}',
+        );
+        final location = _locationForDistrict(
+          rental.siteName,
+          siteName: rental.siteName,
+          address: '${rental.fieldLabel} • ${rental.tankId}',
+        );
+        final transferItem = InternalTransferItem(
+          id: 'MS-${rental.id}',
+          name: rental.item,
+          kind: TransferAssetKind.workEquipment,
+          batchId: 'MS-BATCH-${rental.id}',
+          rentalId: rental.id,
+          rentedQty: qty,
+          returnedQty: 0,
+          thavvuIds: [
+            selectedThavvu,
+            targetThavvu,
+            if (rental.tankId.trim().isNotEmpty) 'THV-${rental.tankId}',
+          ],
+          tankIds: [rental.tankId],
+          location: location,
+        );
+
+        if (existingIndex == -1) {
+          _transferItems.insert(0, transferItem);
+        } else {
+          _transferItems[existingIndex] = transferItem;
+        }
+
+        _internalTransferHistory.insert(
+          0,
+          InternalTransferHistoryRecord(
+            id: 'ITH-MS-${DateTime.now().microsecondsSinceEpoch}',
+            date: DateTime.now(),
+            thavvuId: selectedThavvu,
+            toThavvuId: targetThavvu,
+            transferType: 'Machine',
+            itemName: rental.item,
+            batchId: transferItem.batchId,
+            rentalId: rental.id,
+            numberOfItems: qty,
+            transferredTo: receiver,
+            photoPath: _machineTransferPhotoPath ?? '',
+            notes: 'Machine selected from Active Rentals and transferred from $selectedThavvu to $targetThavvu for $receiver.',
+          ),
+        );
+
+        _addSupplierPaymentItemForTransfer(transferItem);
+      }
+
+      _selectedMachineTransferRentalIds.clear();
+      _confirmedMachineTransferRentalIds.clear();
+      _machineTransferQuantityDraft.clear();
+      _machineTransferPhotoPath = null;
+      final batches = _workEquipmentBatchIds;
+      _selectedWorkEquipmentBatchId =
+          batches.isEmpty ? null : batches.first;
+      final items = _workEquipmentItemsForSelectedBatch;
+      _selectedWorkEquipmentItemId = items.isEmpty ? null : items.first.id;
+    });
+
+    _showSnackbar(
+      'Submit Transfer completed. Machines moved from $selectedThavvu to $targetThavvu with photo proof.',
+      AppTheme.success,
+    );
+  }
+
+  bool _isSameHistoryDate(DateTime left, DateTime right) {
+    return left.year == right.year &&
+        left.month == right.month &&
+        left.day == right.day;
+  }
+
+  List<InternalTransferHistoryRecord> get _generatedInternalTransferHistory {
+    return _transferItems
+        .where((item) => item.returnedQty > 0 && item.kind == TransferAssetKind.workEquipment)
+        .map((item) {
+          final daysAgo = 1 + (item.id.hashCode.abs() % 12);
+          return InternalTransferHistoryRecord(
+            id: 'ITH-SEED-${item.id}',
+            date: DateTime.now().subtract(Duration(days: daysAgo)),
+            thavvuId: _firstId(item.thavvuIds) ?? 'Not assigned',
+            toThavvuId: item.thavvuIds.length > 1 ? item.thavvuIds[1] : '',
+            transferType: 'Work Equipment',
+            itemName: item.name,
+            batchId: item.batchId,
+            rentalId: item.rentalId,
+            numberOfItems: item.returnedQty,
+            transferredTo: 'Existing Supervisor / Department',
+            notes: 'Existing internal transfer record from current rental data.',
+          );
+        }).toList();
+  }
+
+  List<InternalTransferHistoryRecord> get _visibleInternalTransferHistory {
+    final dateFilter = _internalTransferHistoryDateFilter;
+    final combined = <InternalTransferHistoryRecord>[
+      ..._internalTransferHistory,
+      ..._generatedInternalTransferHistory,
+    ];
+
+    final filtered = combined.where((record) {
+      if (dateFilter == null) return true;
+      return _isSameHistoryDate(record.date, dateFilter);
+    }).toList()
+      ..sort((a, b) => b.date.compareTo(a.date));
+
+    return filtered;
   }
 
   void _changeReturnedCount(InternalTransferItem item, int delta) {
     setState(() {
       final next = item.returnedQty + delta;
       item.returnedQty = next.clamp(0, item.rentedQty);
+      _syncSupplierPaymentFromTransfer(item);
     });
   }
 
@@ -1836,9 +3371,10 @@ class _RentalScreenState extends State<RentalScreen>
                         hint: 'Example: 2 HP Paddle Wheel Aerator',
                         icon: Icons.handyman_outlined,
                       ),
-                      validator: (value) => value == null || value.trim().isEmpty
-                          ? 'Enter tool name'
-                          : null,
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                              ? 'Enter tool name'
+                              : null,
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
@@ -2001,7 +3537,8 @@ class _RentalScreenState extends State<RentalScreen>
                   children: [
                     _buildSheetHeader(
                       title: 'Add Internal Transfer',
-                      subtitle: 'Add material or work equipment with Thavvu and tank mapping',
+                      subtitle:
+                          'Add material or work equipment with Thavvu and tank mapping',
                       icon: Icons.swap_horiz,
                       color: AppTheme.info,
                     ),
@@ -2013,9 +3550,10 @@ class _RentalScreenState extends State<RentalScreen>
                         hint: 'Example: Paddle Wheel Aerator',
                         icon: Icons.inventory_2_outlined,
                       ),
-                      validator: (value) => value == null || value.trim().isEmpty
-                          ? 'Enter item name'
-                          : null,
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                              ? 'Enter item name'
+                              : null,
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<TransferAssetKind>(
@@ -2087,7 +3625,7 @@ class _RentalScreenState extends State<RentalScreen>
                             controller: returnedController,
                             keyboardType: TextInputType.number,
                             decoration: _inputDecoration(
-                              label: 'Returned count',
+                              label: 'Transfer count',
                               icon: Icons.assignment_return_outlined,
                             ),
                             validator: (value) {
@@ -2197,6 +3735,7 @@ class _RentalScreenState extends State<RentalScreen>
                           _selectedTransferItem = item;
                           _selectedTransferThavvuId = _firstId(item.thavvuIds);
                           _selectedTransferTankId = _firstId(item.tankIds);
+                          _addSupplierPaymentItemForTransfer(item);
                         });
 
                         Navigator.pop(context);
@@ -2249,7 +3788,8 @@ class _RentalScreenState extends State<RentalScreen>
                   children: [
                     _buildSheetHeader(
                       title: 'Add Vehicle / Tool',
-                      subtitle: 'Add a rentable line under hourly, weekly, trip, or KM billing',
+                      subtitle:
+                          'Add a rentable line under hourly, weekly, trip, or KM billing',
                       icon: Icons.local_shipping_outlined,
                       color: AppTheme.warning,
                     ),
@@ -2261,9 +3801,10 @@ class _RentalScreenState extends State<RentalScreen>
                         hint: 'Example: Feed Transport Lorry',
                         icon: Icons.directions_car_outlined,
                       ),
-                      validator: (value) => value == null || value.trim().isEmpty
-                          ? 'Enter name'
-                          : null,
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                              ? 'Enter name'
+                              : null,
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<VehicleBillingType>(
@@ -2357,7 +3898,6 @@ class _RentalScreenState extends State<RentalScreen>
     );
   }
 
-
   void _showAddVehicleWorkEntrySheet({VehicleBillingType? initialType}) {
     final formKey = GlobalKey<FormState>();
     VehicleBillingType selectedType = initialType ?? VehicleBillingType.hourly;
@@ -2368,7 +3908,8 @@ class _RentalScreenState extends State<RentalScreen>
     final fromController = TextEditingController(text: 'Aqua yard');
     final toController = TextEditingController(text: 'Pond work site');
     final operatorController = TextEditingController(text: 'Driver / Operator');
-    final unitsController = TextEditingController(text: _defaultVehicleUsage(selectedType));
+    final unitsController =
+        TextEditingController(text: _defaultVehicleUsage(selectedType));
     final rateController = TextEditingController();
     final fuelController = TextEditingController(text: '0');
     final bataController = TextEditingController(text: '0');
@@ -2430,7 +3971,8 @@ class _RentalScreenState extends State<RentalScreen>
                   children: [
                     _buildSheetHeader(
                       title: 'Add Vehicle Work Entry',
-                      subtitle: 'Real-world billing with HR, WK, TR, and KM support',
+                      subtitle:
+                          'Real-world billing with HR, WK, TR, and KM support',
                       icon: Icons.assignment_add,
                       color: AppTheme.warning,
                     ),
@@ -2453,8 +3995,10 @@ class _RentalScreenState extends State<RentalScreen>
                         if (value == null) return;
                         sheetSetState(() {
                           selectedType = value;
-                          selectedVehicleId = _selectedVehicles[selectedType]?.id;
-                          selectedThavvuId = _selectedVehicleThavvuIds[selectedType];
+                          selectedVehicleId =
+                              _selectedVehicles[selectedType]?.id;
+                          selectedThavvuId =
+                              _selectedVehicleThavvuIds[selectedType];
                           syncVehicleDefaults();
                         });
                       },
@@ -2474,7 +4018,8 @@ class _RentalScreenState extends State<RentalScreen>
                             ),
                           )
                           .toList(),
-                      validator: (_) => options.isEmpty ? 'Add a vehicle first' : null,
+                      validator: (_) =>
+                          options.isEmpty ? 'Add a vehicle first' : null,
                       onChanged: options.isEmpty
                           ? null
                           : (value) {
@@ -2683,7 +4228,8 @@ class _RentalScreenState extends State<RentalScreen>
                       maxLines: 3,
                       decoration: _inputDecoration(
                         label: 'Work note',
-                        hint: 'Example: feed bags moved, harvest dispatch, bund repair',
+                        hint:
+                            'Example: feed bags moved, harvest dispatch, bund repair',
                         icon: Icons.notes_outlined,
                       ),
                     ),
@@ -2694,7 +4240,8 @@ class _RentalScreenState extends State<RentalScreen>
                       decoration: BoxDecoration(
                         color: AppTheme.warning.withOpacity(0.08),
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: AppTheme.warning.withOpacity(0.22)),
+                        border: Border.all(
+                            color: AppTheme.warning.withOpacity(0.22)),
                       ),
                       child: Text(
                         _vehicleWorkHint(selectedType),
@@ -2722,7 +4269,9 @@ class _RentalScreenState extends State<RentalScreen>
                           vehicleCatalogId: chosenVehicle.id,
                           vehicleName: chosenVehicle.name,
                           billingType: selectedType,
-                          thavvuId: selectedThavvuId ?? _firstId(chosenVehicle.thavvuIds) ?? 'THV-VH-NEW',
+                          thavvuId: selectedThavvuId ??
+                              _firstId(chosenVehicle.thavvuIds) ??
+                              'THV-VH-NEW',
                           tankId: tankController.text.trim().isEmpty
                               ? 'TNK-AP-NEW'
                               : tankController.text.trim(),
@@ -2732,15 +4281,17 @@ class _RentalScreenState extends State<RentalScreen>
                           toLocation: toController.text.trim().isEmpty
                               ? 'Pond work site'
                               : toController.text.trim(),
-                          driverOrOperator: operatorController.text.trim().isEmpty
-                              ? 'Driver / Operator'
-                              : operatorController.text.trim(),
+                          driverOrOperator:
+                              operatorController.text.trim().isEmpty
+                                  ? 'Driver / Operator'
+                                  : operatorController.text.trim(),
                           workDate: DateTime.now(),
                           units: double.parse(unitsController.text),
                           rate: double.parse(rateController.text),
                           fuelCost: double.tryParse(fuelController.text) ?? 0,
                           driverBata: double.tryParse(bataController.text) ?? 0,
-                          loadingCharge: double.tryParse(loadingController.text) ?? 0,
+                          loadingCharge:
+                              double.tryParse(loadingController.text) ?? 0,
                           status: selectedStatus,
                           notes: notesController.text.trim(),
                         );
@@ -2748,7 +4299,8 @@ class _RentalScreenState extends State<RentalScreen>
                         setState(() {
                           _vehicleEntries.insert(0, entry);
                           _selectedVehicles[selectedType] = chosenVehicle;
-                          _selectedVehicleThavvuIds[selectedType] = entry.thavvuId;
+                          _selectedVehicleThavvuIds[selectedType] =
+                              entry.thavvuId;
                         });
 
                         Navigator.pop(context);
@@ -2770,7 +4322,6 @@ class _RentalScreenState extends State<RentalScreen>
     );
   }
 
-
   void _markVehicleEntryCompleted(VehicleRentalEntry entry) {
     final index = _vehicleEntries.indexWhere((item) => item.id == entry.id);
     if (index == -1) return;
@@ -2779,7 +4330,8 @@ class _RentalScreenState extends State<RentalScreen>
       _vehicleEntries[index] = entry.copyWith(status: 'Completed');
     });
 
-    _showSnackbar('${entry.vehicleName} marked as completed.', AppTheme.success);
+    _showSnackbar(
+        '${entry.vehicleName} marked as completed.', AppTheme.success);
   }
 
   void _deleteVehicleEntry(VehicleRentalEntry entry) {
@@ -2789,7 +4341,6 @@ class _RentalScreenState extends State<RentalScreen>
 
     _showSnackbar('${entry.vehicleName} work entry removed.', AppTheme.danger);
   }
-
 
   // =========================
   // Utilities
@@ -2815,10 +4366,16 @@ class _RentalScreenState extends State<RentalScreen>
   double _calculateEarnedAmount() {
     if (_rateController.text.isEmpty) return 0;
     final rate = double.tryParse(_rateController.text) ?? 0;
-    return _billingMode == 'Per day' ? rate : rate * 8;
+    final quantity = math.max(
+      _currentDraftRentalItems().fold(0, (sum, item) => sum + item.quantity),
+      1,
+    );
+    final base = _billingMode == 'Per day' ? rate : rate * 8;
+    return base * quantity;
   }
 
   double _calculateUsedAmount() {
+    if (!_rentalFuelEnabled) return 0;
     return double.tryParse(_fuelController.text) ?? 0;
   }
 
@@ -2839,6 +4396,1955 @@ class _RentalScreenState extends State<RentalScreen>
     );
   }
 
+  Widget _uploadButton({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    final lowerLabel = label.toLowerCase();
+    final attached =
+        lowerLabel.contains('added') || lowerLabel.contains('captured');
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: attached ? AppTheme.successBg : AppTheme.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: attached ? AppTheme.success : color.withOpacity(0.35),
+            width: attached ? 1.4 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: attached
+                      ? AppTheme.success.withOpacity(0.25)
+                      : color.withOpacity(0.22),
+                ),
+              ),
+              child: Icon(icon,
+                  size: 20, color: attached ? AppTheme.success : color),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: attached ? AppTheme.success : AppTheme.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    attached ? 'Tap to replace' : 'Tap to upload',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              attached ? Icons.check_circle : Icons.upload_file_outlined,
+              color: attached ? AppTheme.success : color,
+              size: 19,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================
+  // New advance payment helpers
+  // =========================
+
+  List<RentalPaymentTransaction> get _cashTransactions =>
+      _rentalPaymentLedger.where((entry) => entry.type == 'cash').toList()
+        ..sort((a, b) => b.date.compareTo(a.date));
+
+  List<RentalPaymentTransaction> get _advanceTransactions =>
+      _rentalPaymentLedger.where((entry) => entry.type == 'advance').toList()
+        ..sort((a, b) => b.date.compareTo(a.date));
+
+  Widget _buildPaymentSection() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Cash Payment',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text('Pay via cash (HOD limit applies)'),
+                value: _enableCashPayment,
+                activeColor: AppTheme.info,
+                onChanged: (val) => setState(() => _enableCashPayment = val),
+              ),
+            ),
+            GestureDetector(
+              onTap: () => _showTransactionHistorySheet('cash'),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTheme.info.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppTheme.info.withOpacity(0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.receipt_long,
+                        size: 14, color: AppTheme.info),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_cashTransactions.length} payment${_cashTransactions.length == 1 ? "" : "s"}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.info),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+          ],
+        ),
+        if (_enableCashPayment) ...[
+          _buildCashPaymentSection(),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: (_enableCashPayment &&
+                      (double.tryParse(_cashAmountController.text) ?? 0) > 0)
+                  ? _proceedCashPayment
+                  : null,
+              icon: const Icon(Icons.payment, size: 18),
+              label: const Text('Proceed Payment'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.info,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        _buildCashPaymentTable(),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Advance Request',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text('Request advance from finance'),
+                value: _enableAdvancePayment,
+                activeColor: AppTheme.success,
+                onChanged: (val) => setState(() => _enableAdvancePayment = val),
+              ),
+            ),
+            GestureDetector(
+              onTap: () => _showTransactionHistorySheet('advance'),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTheme.success.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border:
+                      Border.all(color: AppTheme.success.withOpacity(0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.request_quote_outlined,
+                        size: 14, color: AppTheme.success),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_advanceTransactions.length} request${_advanceTransactions.length == 1 ? "" : "s"}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.success),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+          ],
+        ),
+        if (_enableAdvancePayment) ...[
+          const SizedBox(height: 8),
+          _buildAdvancePaymentSection(),
+        ],
+        const SizedBox(height: 12),
+        _buildAdvanceRequestTable(),
+      ],
+    );
+  }
+
+  void _proceedCashPayment() {
+    final amount = double.tryParse(_cashAmountController.text) ?? 0;
+    if (amount <= 0) {
+      _showSnackbar('Enter valid cash amount', AppTheme.warning);
+      return;
+    }
+    if (amount > _cashLimit) {
+      _showSnackbar(
+        'Cash amount exceeds limit of ₹${_cashLimit.toStringAsFixed(0)}',
+        AppTheme.warning,
+      );
+      return;
+    }
+    if (amount > _cashBalance) {
+      _showSnackbar('Insufficient cash balance', AppTheme.warning);
+      return;
+    }
+
+    if (_hasActiveSupplierPaymentPlan) {
+      final expectedAmount = _activeSupplierPaymentPlanQtyById.entries
+          .fold<double>(0, (sum, entry) {
+        final item = _supplierPaymentItems.firstWhere(
+          (value) => value.id == entry.key,
+          orElse: () => SupplierPaymentItem(
+            id: '',
+            supplierName: '',
+            transferItemId: '',
+            itemName: '',
+            batchId: '',
+            rentalId: '',
+            startDate: DateTime.now(),
+            takenQty: 0,
+            ratePerDay: 0,
+          ),
+        );
+        if (item.id.isEmpty) return sum;
+        return sum + item.amountFor(
+          qty: entry.value,
+          endDate: _activeSupplierPaymentPlanEndDate ?? DateTime.now(),
+        );
+      });
+
+      if ((amount - expectedAmount).abs() > 0.50) {
+        _showSnackbar(
+          'Cash amount must match selected payment plan: ${_formatMoney(expectedAmount)}',
+          AppTheme.warning,
+        );
+        return;
+      }
+    }
+
+    final now = DateTime.now();
+    final txn = RentalPaymentTransaction(
+      id: 'CASH-${now.millisecondsSinceEpoch}',
+      type: 'cash',
+      amount: amount,
+      method: 'Cash',
+      date: now,
+      status: 'Completed',
+      note: _hasActiveSupplierPaymentPlan
+          ? 'Supplier payment plan completed by cash'
+          : 'Cash payment recorded',
+    );
+
+    setState(() {
+      _rentalPaymentLedger.insert(0, txn);
+    });
+
+    unawaited(_persistRentalPayment(
+      supplierName: _selectedPaymentSupplier ?? 'Rental Cash',
+      amount: amount,
+      mode: 'cash',
+      note: txn.note,
+    ));
+
+    if (_hasActiveSupplierPaymentPlan) {
+      _completeSupplierPaymentPlan(
+        qtyById: Map<String, int>.from(_activeSupplierPaymentPlanQtyById),
+        endDate: _activeSupplierPaymentPlanEndDate ?? now,
+        paymentMethod: 'Cash',
+        paymentReference: txn.id,
+        noteType: _activeSupplierPaymentPlanNoteType,
+        noteDetails: _activeSupplierPaymentPlanNote,
+      );
+      if (Navigator.canPop(context)) Navigator.pop(context);
+    }
+
+    setState(() {
+      _cashAmountController.clear();
+      _enableCashPayment = false;
+      _clearActiveSupplierPaymentPlan();
+    });
+    _showSnackbar(
+      'Cash payment of ₹${amount.toStringAsFixed(0)} recorded',
+      AppTheme.success,
+    );
+  }
+
+  Widget _buildCashPaymentSection() {
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          margin: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            color: AppTheme.infoBg,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.account_balance_wallet,
+                  size: 16, color: AppTheme.info),
+              const SizedBox(width: 6),
+              Text(
+                'Available Balance: ₹${_cashBalance.toStringAsFixed(0)}',
+                style:
+                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ),
+        TextFormField(
+          controller: _cashAmountController,
+          keyboardType: TextInputType.number,
+          decoration: _inputDecoration(
+            label: 'Cash Amount (₹)',
+            hint: 'Max ₹${_cashLimit.toStringAsFixed(0)}',
+            icon: Icons.currency_rupee,
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 8),
+        _buildCashValidationInfo(),
+      ],
+    );
+  }
+
+  Widget _buildCashValidationInfo() {
+    final text = _cashAmountController.text;
+    final amount = double.tryParse(text) ?? 0;
+    if (text.isEmpty) {
+      return _paymentNotice(
+        'Balance after payment: ₹${_cashBalance.toStringAsFixed(0)}',
+        AppTheme.info,
+        Icons.info_outline,
+      );
+    }
+    if (amount > _cashLimit) {
+      return _paymentNotice(
+        'Exceeds HOD limit of ₹${_cashLimit.toStringAsFixed(0)}. Use advance request for balance.',
+        AppTheme.danger,
+        Icons.error_outline,
+      );
+    }
+    if (amount > _cashBalance) {
+      return _paymentNotice(
+        'Insufficient cash balance. Available: ₹${_cashBalance.toStringAsFixed(0)}.',
+        AppTheme.danger,
+        Icons.warning_amber,
+      );
+    }
+    return _paymentNotice(
+      'Valid. Balance after payment: ₹${(_cashBalance - amount).toStringAsFixed(0)}',
+      AppTheme.success,
+      Icons.check_circle,
+    );
+  }
+
+  Widget _buildCashPaymentTable() {
+    return _buildLedgerTableShell(
+      title: 'Cash Payment Table',
+      subtitle: 'Amount is auto-filled when payment is completed; use Edit to correct amount',
+      color: AppTheme.info,
+      icon: Icons.payments_outlined,
+      emptyText: 'No cash payments generated yet.',
+      child: _cashTransactions.isEmpty
+          ? null
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 42,
+                dataRowMinHeight: 52,
+                dataRowMaxHeight: 62,
+                columnSpacing: 18,
+                columns: const [
+                  DataColumn(label: Text('Cash Payment ID')),
+                  DataColumn(label: Text('Time')),
+                  DataColumn(label: Text('Amount')),
+                  DataColumn(label: Text('Edit')),
+                ],
+                rows: _cashTransactions.map((txn) {
+                  return DataRow(
+                    cells: [
+                      DataCell(Text(txn.id, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                      DataCell(Text(_formatCompactDateTime(txn.date), style: const TextStyle(fontSize: 12))),
+                      DataCell(Text('₹${txn.amount.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
+                      DataCell(
+                        TextButton.icon(
+                          onPressed: () => _showEditCashPaymentSheet(txn),
+                          icon: const Icon(Icons.edit_outlined, size: 15),
+                          label: const Text('Edit'),
+                          style: TextButton.styleFrom(foregroundColor: AppTheme.info),
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+    );
+  }
+
+  Widget _buildAdvanceRequestTable() {
+    return _buildLedgerTableShell(
+      title: 'Advance Payment Request Table',
+      subtitle: 'Proof and Machine IDs Book unlock only after the requested amount is completed',
+      color: AppTheme.success,
+      icon: Icons.request_quote_outlined,
+      emptyText: 'No advance payment requests generated yet.',
+      child: _advanceTransactions.isEmpty
+          ? null
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 42,
+                dataRowMinHeight: 64,
+                dataRowMaxHeight: 82,
+                columnSpacing: 18,
+                columns: const [
+                  DataColumn(label: Text('Request Payment ID')),
+                  DataColumn(label: Text('Request Time')),
+                  DataColumn(label: Text('Amount')),
+                  DataColumn(label: Text('Requested Status')),
+                  DataColumn(label: Text('Payment Proof')),
+                  DataColumn(label: Text('Machine IDs Book')),
+                ],
+                rows: _advanceTransactions.map((txn) {
+                  final completed = txn.status == 'Completed';
+                  return DataRow(
+                    cells: [
+                      DataCell(Text(txn.id, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                      DataCell(Text(_formatCompactDateTime(txn.date), style: const TextStyle(fontSize: 12))),
+                      DataCell(Text('₹${txn.amount.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
+                      DataCell(
+                        completed
+                            ? _rentalStatusChip('Completed', AppTheme.success)
+                            : TextButton.icon(
+                                onPressed: () => _completeRequestedAdvance(txn),
+                                icon: const Icon(Icons.verified_outlined, size: 15),
+                                label: const Text('Requested'),
+                                style: TextButton.styleFrom(foregroundColor: AppTheme.warning),
+                              ),
+                      ),
+                      DataCell(
+                        completed
+                            ? _rentalProofPreview(txn.paymentProof ?? 'Payment proof')
+                            : const Text('Visible after completion', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                      ),
+                      DataCell(
+                        completed
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    txn.registeredInMachineIdsBook ? 'Yes' : 'No',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                      color: txn.registeredInMachineIdsBook ? AppTheme.success : AppTheme.textMuted,
+                                    ),
+                                  ),
+                                  Switch.adaptive(
+                                    value: txn.registeredInMachineIdsBook,
+                                    activeColor: AppTheme.success,
+                                    onChanged: (value) => _toggleAdvanceMachineBook(txn, value),
+                                  ),
+                                ],
+                              )
+                            : const Text('Locked', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+    );
+  }
+
+  Widget _buildLedgerTableShell({
+    required String title,
+    required String subtitle,
+    required Color color,
+    required IconData icon,
+    required String emptyText,
+    required Widget? child,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 19),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 2),
+                    Text(subtitle, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (child == null)
+            Text(emptyText, style: const TextStyle(fontSize: 12, color: AppTheme.textMuted))
+          else
+            child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdvancePaymentSection() {
+    final advanceAmount =
+        double.tryParse(_advanceAmountController.text) ?? 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextFormField(
+          controller: _advanceAmountController,
+          keyboardType: TextInputType.number,
+          decoration: _inputDecoration(
+            label: 'Advance Amount (₹)',
+            icon: Icons.request_quote_outlined,
+            suffixText: '₹',
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 12),
+        const Text('Payment Method',
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.textSecondary)),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _rentalPaymentOption(
+                label: 'UPI',
+                icon: Icons.qr_code,
+                color: AppTheme.success,
+                selected: _selectedAdvanceMode == 'upi',
+                onTap: () => setState(() {
+                  _selectedAdvanceMode = 'upi';
+                  _selectedEntryMethod = null;
+                }),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _rentalPaymentOption(
+                label: 'Bank Transfer',
+                icon: Icons.account_balance,
+                color: AppTheme.info,
+                selected: _selectedAdvanceMode == 'bank',
+                onTap: () => setState(() {
+                  _selectedAdvanceMode = 'bank';
+                  _selectedEntryMethod = null;
+                }),
+              ),
+            ),
+          ],
+        ),
+        if (_selectedAdvanceMode == 'upi') ...[
+          const SizedBox(height: 12),
+          _buildUpiAccountSelection(),
+        ],
+        if (_selectedAdvanceMode == 'bank') ...[
+          const SizedBox(height: 12),
+          _buildBankDetailsSection(),
+        ],
+        if (advanceAmount > 0 && _selectedAdvanceMode != null) ...[
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _submitAdvanceRequest,
+              icon: const Icon(Icons.send, size: 18),
+              label: const Text('Submit Request'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.success,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+        ],
+        if (_selectedAdvanceMode != null) ...[
+          const SizedBox(height: 10),
+          _paymentNotice(
+            'Request will be sent for approval',
+            AppTheme.success,
+            Icons.info_outline,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildUpiAccountSelection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Select Verified UPI Account',
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.textSecondary)),
+        const SizedBox(height: 8),
+        ..._savedAccounts.map((account) => GestureDetector(
+              onTap: () => setState(
+                  () => _selectedPaymentAccount = account['id']),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 14),
+                decoration: BoxDecoration(
+                  color: _selectedPaymentAccount == account['id']
+                      ? AppTheme.successBg
+                      : AppTheme.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: _selectedPaymentAccount == account['id']
+                          ? AppTheme.success
+                          : AppTheme.border,
+                      width: _selectedPaymentAccount == account['id']
+                          ? 2
+                          : 1),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                        _selectedPaymentAccount == account['id']
+                            ? Icons.check_circle
+                            : Icons.account_balance_wallet,
+                        size: 20,
+                        color: _selectedPaymentAccount == account['id']
+                            ? AppTheme.success
+                            : AppTheme.textMuted),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(account['upiId']!,
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  color: _selectedPaymentAccount ==
+                                          account['id']
+                                      ? AppTheme.success
+                                      : AppTheme.textPrimary)),
+                          Text(account['bankName']!,
+                              style: const TextStyle(
+                                  fontSize: 10,
+                                  color: AppTheme.textMuted)),
+                        ],
+                      ),
+                    ),
+                    if (account['type'] == 'primary')
+                      Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                              color: AppTheme.infoBg,
+                              borderRadius:
+                                  BorderRadius.circular(6)),
+                          child: const Text('Default',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  color: AppTheme.info))),
+                    IconButton(
+                      icon: const Icon(Icons.edit, size: 18),
+                      onPressed: () => _showAddAccountSheet(
+                          existingId: account['id']),
+                      color: AppTheme.warning,
+                    ),
+                  ],
+                ),
+              ),
+            )).toList(),
+        TextButton.icon(
+          onPressed: _showAddAccountSheet,
+          icon: const Icon(Icons.add, size: 16),
+          label: const Text('Add UPI Account'),
+          style: TextButton.styleFrom(
+              foregroundColor: AppTheme.info),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBankDetailsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_savedBankAccounts.isNotEmpty) ...[
+          const Text('Saved Bank Accounts',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textSecondary)),
+          const SizedBox(height: 8),
+          ..._savedBankAccounts.map((bank) => GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _selectedBankAccount = bank['id'];
+                    _ifscController.text = bank['ifsc']!;
+                    _accNumController.text = bank['accountNumber']!
+                        .replaceAll('****', '');
+                    _bankNameController.text = bank['bankName']!;
+                    _selectedEntryMethod = 'manual';
+                  });
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: _selectedBankAccount == bank['id']
+                        ? AppTheme.infoBg
+                        : AppTheme.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: _selectedBankAccount == bank['id']
+                            ? AppTheme.info
+                            : AppTheme.border,
+                        width:
+                            _selectedBankAccount == bank['id']
+                                ? 2
+                                : 1),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                          _selectedBankAccount == bank['id']
+                              ? Icons.check_circle
+                              : Icons.account_balance_outlined,
+                          size: 20,
+                          color: _selectedBankAccount == bank['id']
+                              ? AppTheme.info
+                              : AppTheme.textMuted),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            Text(bank['bankName']!,
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color:
+                                        _selectedBankAccount ==
+                                                bank['id']
+                                            ? AppTheme.info
+                                            : AppTheme.textPrimary)),
+                            Text(
+                                'A/C ${bank['accountNumber']}  ·  IFSC: ${bank['ifsc']}',
+                                style: const TextStyle(
+                                    fontSize: 10,
+                                    color: AppTheme.textMuted)),
+                            if (bank['holderName'] != null &&
+                                bank['holderName']!.isNotEmpty)
+                              Text(bank['holderName']!,
+                                  style: const TextStyle(
+                                      fontSize: 10,
+                                      color:
+                                          AppTheme.textSecondary)),
+                          ],
+                        ),
+                      ),
+                      if (bank['type'] == 'primary')
+                        Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                                color: AppTheme.infoBg,
+                                borderRadius:
+                                    BorderRadius.circular(6)),
+                            child: const Text('Default',
+                                style: TextStyle(
+                                    fontSize: 9,
+                                    color: AppTheme.info))),
+                      IconButton(
+                        icon: const Icon(Icons.edit, size: 16),
+                        onPressed: () => _showAddBankAccountSheet(
+                            existingId: bank['id']),
+                        color: AppTheme.warning,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
+                  ),
+                ),
+              )).toList(),
+          TextButton.icon(
+            onPressed: _showAddBankAccountSheet,
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('Add New Bank Account'),
+            style: TextButton.styleFrom(
+                foregroundColor: AppTheme.info),
+          ),
+          const SizedBox(height: 12),
+          const Divider(),
+          const SizedBox(height: 12),
+          const Text('Or enter manually',
+              style: TextStyle(
+                  fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 8),
+        ],
+        const Text('Select Entry Method',
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.textSecondary)),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+                child: _rentalEntryMethodOption(
+                    'manual', 'Manual', Icons.edit_outlined)),
+            const SizedBox(width: 8),
+            Expanded(
+                child: _rentalEntryMethodOption(
+                    'photo', 'Photo', Icons.camera_alt_outlined)),
+            const SizedBox(width: 8),
+            Expanded(
+                child: _rentalEntryMethodOption(
+                    'voice', 'Voice', Icons.mic_none)),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (_selectedEntryMethod == 'manual') ...[
+          const Text('Bank Details',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textSecondary)),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _ifscController,
+            decoration: _inputDecoration(
+              label: 'IFSC Code',
+              icon: Icons.code,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _accNumController,
+            keyboardType: TextInputType.number,
+            decoration: _inputDecoration(
+              label: 'Account Number',
+              icon: Icons.account_balance,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _bankNameController,
+            decoration: _inputDecoration(
+              label: 'Bank Name',
+              icon: Icons.business,
+            ),
+          ),
+        ] else if (_selectedEntryMethod == 'photo') ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.infoBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: AppTheme.info.withOpacity(0.2)),
+            ),
+            child: const Row(children: [
+              Icon(Icons.camera_alt, color: AppTheme.info),
+              SizedBox(width: 8),
+              Text('Upload bank screenshot',
+                  style: TextStyle(color: AppTheme.info)),
+            ]),
+          ),
+        ] else if (_selectedEntryMethod == 'voice') ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.infoBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: AppTheme.info.withOpacity(0.2)),
+            ),
+            child: const Row(children: [
+              Icon(Icons.mic, color: AppTheme.info),
+              SizedBox(width: 8),
+              Text('Record bank details by voice',
+                  style: TextStyle(color: AppTheme.info)),
+            ]),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _rentalEntryMethodOption(String method, String title, IconData icon) {
+    final isSelected = _selectedEntryMethod == method;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedEntryMethod = method),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? AppTheme.success.withOpacity(0.1) : AppTheme.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? AppTheme.success : AppTheme.border,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(icon,
+                size: 22,
+                color: isSelected ? AppTheme.success : AppTheme.textSecondary),
+            const SizedBox(height: 4),
+            Text(title,
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: isSelected ? AppTheme.success : AppTheme.textSecondary)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAddAccountSheet({String? existingId}) {
+    final nameController = TextEditingController();
+    final upiController = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+            left: 16, right: 16, top: 16,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Add UPI Account', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Bank Name')),
+              const SizedBox(height: 8),
+              TextField(controller: upiController, decoration: const InputDecoration(labelText: 'UPI ID')),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () {
+                  if (nameController.text.isNotEmpty && upiController.text.isNotEmpty) {
+                    setState(() {
+                      _savedAccounts.add({
+                        'id': DateTime.now().millisecondsSinceEpoch.toString(),
+                        'upiId': upiController.text,
+                        'bankName': nameController.text,
+                        'type': 'secondary',
+                      });
+                    });
+                    Navigator.pop(context);
+                    _showSnackbar('UPI account added', AppTheme.success);
+                  }
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showAddBankAccountSheet({String? existingId}) {
+    // For brevity, show a placeholder message; implement full form if needed.
+    _showSnackbar('Add bank account feature – implement full form as required.', AppTheme.info);
+  }
+
+  void _submitAdvanceRequest() {
+    final amount = double.tryParse(_advanceAmountController.text) ?? 0;
+    if (amount <= 0) {
+      _showSnackbar('Enter valid advance amount', AppTheme.warning);
+      return;
+    }
+    if (_selectedAdvanceMode == null) {
+      _showSnackbar('Select payment method (UPI or Bank)', AppTheme.warning);
+      return;
+    }
+    if (_selectedAdvanceMode == 'upi' && _selectedPaymentAccount == null) {
+      _showSnackbar('Select a UPI account', AppTheme.warning);
+      return;
+    }
+    if (_selectedAdvanceMode == 'bank' && _selectedEntryMethod == null) {
+      _showSnackbar('Select bank request entry method', AppTheme.warning);
+      return;
+    }
+
+    final hadSupplierPaymentPlan = _hasActiveSupplierPaymentPlan;
+    final now = DateTime.now();
+    final txn = RentalPaymentTransaction(
+      id: 'ADV-${now.millisecondsSinceEpoch}',
+      type: 'advance',
+      amount: amount,
+      method: _selectedAdvanceMode == 'upi' ? 'UPI' : 'Bank Transfer',
+      date: now,
+      status: 'Requested',
+      note: _hasActiveSupplierPaymentPlan
+          ? 'Supplier payment plan request via ${_selectedAdvanceMode}'
+          : 'Advance request via ${_selectedAdvanceMode}',
+      registeredInMachineIdsBook: false,
+    );
+
+    setState(() {
+      _rentalPaymentLedger.insert(0, txn);
+      if (_hasActiveSupplierPaymentPlan) {
+        _pendingSupplierPaymentPlans[txn.id] =
+            Map<String, int>.from(_activeSupplierPaymentPlanQtyById);
+        _pendingSupplierPaymentPlanEndDates[txn.id] =
+            _activeSupplierPaymentPlanEndDate ?? now;
+        _pendingSupplierPaymentPlanNoteTypes[txn.id] =
+            _activeSupplierPaymentPlanNoteType;
+        _pendingSupplierPaymentPlanNotes[txn.id] = _activeSupplierPaymentPlanNote;
+      }
+      _advanceAmountController.clear();
+      _selectedAdvanceMode = null;
+      _selectedEntryMethod = null;
+      _selectedPaymentAccount = null;
+      _selectedBankAccount = null;
+      _clearActiveSupplierPaymentPlan();
+    });
+
+    if (hadSupplierPaymentPlan && Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+    _showSnackbar(
+      hadSupplierPaymentPlan
+          ? 'Supplier payment request submitted for ₹${amount.toStringAsFixed(0)}'
+          : 'Advance request submitted for ₹${amount.toStringAsFixed(0)}',
+      AppTheme.success,
+    );
+  }
+
+  void _completeRequestedAdvance(RentalPaymentTransaction txn) {
+    final pendingPlan = _pendingSupplierPaymentPlans.remove(txn.id);
+    final pendingEndDate = _pendingSupplierPaymentPlanEndDates.remove(txn.id);
+    final pendingNoteType = _pendingSupplierPaymentPlanNoteTypes.remove(txn.id);
+    final pendingNote = _pendingSupplierPaymentPlanNotes.remove(txn.id);
+
+    setState(() {
+      txn.status = 'Completed';
+      txn.paymentProof = 'advance_proof_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    });
+
+    if (pendingPlan != null) {
+      _completeSupplierPaymentPlan(
+        qtyById: pendingPlan,
+        endDate: pendingEndDate ?? DateTime.now(),
+        paymentMethod: txn.method,
+        paymentReference: txn.id,
+        noteType: pendingNoteType ?? 'Manual Note',
+        noteDetails: pendingNote ?? '',
+      );
+      _showSnackbar('Requested supplier payment completed and items closed', AppTheme.success);
+      return;
+    }
+
+    _showSnackbar('Advance payment completed', AppTheme.success);
+  }
+
+  void _toggleAdvanceMachineBook(RentalPaymentTransaction txn, bool value) {
+    setState(() => txn.registeredInMachineIdsBook = value);
+  }
+
+  void _showEditCashPaymentSheet(RentalPaymentTransaction txn) {
+    final controller = TextEditingController(text: txn.amount.toStringAsFixed(0));
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+            left: 16, right: 16, top: 16,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Edit Cash Payment', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              TextField(controller: controller, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Correct Amount (₹)')),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () {
+                  final newAmount = double.tryParse(controller.text) ?? 0;
+                  if (newAmount > 0) {
+                    setState(() => txn.amount = newAmount);
+                    Navigator.pop(context);
+                    _showSnackbar('Cash payment updated', AppTheme.success);
+                  }
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showTransactionHistorySheet(String type) {
+    final transactions = type == 'advance' ? _advanceTransactions : _cashTransactions;
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListView(
+          children: transactions.map((txn) => ListTile(
+            title: Text(txn.id),
+            subtitle: Text('${_formatCompactDateTime(txn.date)} - ₹${txn.amount.toStringAsFixed(0)}'),
+            trailing: Text(txn.status),
+          )).toList(),
+        ),
+      ),
+    );
+  }
+
+  String _formatCompactDateTime(DateTime date) {
+    return '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+  }
+
+
+  // =========================
+  // Supervisor Reports + Computed Payment Summary
+  // =========================
+
+  int _daysBetween(DateTime date) {
+    return math.max(1, DateTime.now().difference(date).inDays + 1);
+  }
+
+  double _computedRentalTotal(RentalItem rental) {
+    if (rental.isActivated && rental.activationDate != null) {
+      return rental.getEarnedAmount();
+    }
+    return rental.rate * rental.totalQuantity * _daysBetween(rental.startDate);
+  }
+
+  double _completedPaidForRental(RentalItem rental) {
+    return rental.paymentTransactions
+        .where((txn) => txn.status == 'Completed')
+        .fold<double>(0, (sum, txn) => sum + txn.amount);
+  }
+
+  String _computedPaymentStatus({
+    required double totalAmount,
+    required double paidAmount,
+  }) {
+    final balance = totalAmount - paidAmount;
+    if (balance <= 0) return 'Paid';
+    if (paidAmount > 0) return 'Partial';
+    return 'Pending';
+  }
+
+  Color _computedPaymentStatusColor(String status) {
+    switch (status) {
+      case 'Paid':
+      case 'Completed':
+      case 'Closed':
+        return AppTheme.success;
+      case 'Partial':
+      case 'Partial Closed':
+      case 'Partial Open':
+      case 'Requested':
+      case 'Billing Pending':
+        return AppTheme.warning;
+      default:
+        return AppTheme.danger;
+    }
+  }
+
+  Widget _computedPaymentStatusChip(String status) {
+    final color = _computedPaymentStatusColor(status);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.22)),
+      ),
+      child: Text(
+        status,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+          color: color,
+        ),
+      ),
+    );
+  }
+
+  String _supplierNameForRental(RentalItem rental) {
+    final transfer = _transferItems.where((item) => item.rentalId == rental.id);
+    if (transfer.isNotEmpty) return _supplierNameForTransferItem(transfer.first);
+    if (rental.operatorName.trim().isNotEmpty &&
+        rental.operatorName != 'Operator not assigned') {
+      return rental.operatorName;
+    }
+    return 'Rental Supplier';
+  }
+
+  String _supplierNameForClosedRental(Map<String, dynamic> rental) {
+    final id = (rental['id'] ?? '').toString();
+    final payment = _supplierPaymentItems.where((item) => item.rentalId == id);
+    if (payment.isNotEmpty) return payment.first.supplierName;
+    return 'Closed Rental Supplier';
+  }
+
+  List<String> get _reportSupplierNames {
+    final names = <String>{
+      ..._activeRentals.map(_supplierNameForRental),
+      ..._closedRentals.map(_supplierNameForClosedRental),
+      ..._transferItems.map(_supplierNameForTransferItem),
+      ..._supplierPaymentHistory.map((record) => record.supplierName),
+    }.where((name) => name.trim().isNotEmpty).toList()
+      ..sort();
+    return names;
+  }
+
+  bool _dateInReportRange(DateTime date) {
+    final from = _reportFromDateFilter;
+    final to = _reportToDateFilter;
+    final normalized = DateTime(date.year, date.month, date.day);
+    if (from != null) {
+      final f = DateTime(from.year, from.month, from.day);
+      if (normalized.isBefore(f)) return false;
+    }
+    if (to != null) {
+      final t = DateTime(to.year, to.month, to.day);
+      if (normalized.isAfter(t)) return false;
+    }
+    return true;
+  }
+
+  bool _stringDateInReportRange(String value) {
+    if (_reportFromDateFilter == null && _reportToDateFilter == null) return true;
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return false;
+    final parsed = DateTime.tryParse(trimmed);
+    if (parsed != null) return _dateInReportRange(parsed);
+
+    final from = _reportFromDateFilter;
+    final to = _reportToDateFilter;
+    if (from != null && trimmed == _formatDate(from)) return true;
+    if (to != null && trimmed == _formatDate(to)) return true;
+    return false;
+  }
+
+  bool _matchesReportSupplier(String supplierName) {
+    final selected = _reportSupplierFilter;
+    if (selected == null || selected == 'All Suppliers') return true;
+    return supplierName == selected;
+  }
+
+  bool _matchesReportSearch(Iterable<String> values) {
+    final query = _reportSearch.trim().toLowerCase();
+    if (query.isEmpty) return true;
+    return values.any((value) => value.toLowerCase().contains(query));
+  }
+
+  List<RentalItem> get _filteredActiveRentalReports {
+    return _activeRentals.where((rental) {
+      final supplier = _supplierNameForRental(rental);
+      return _dateInReportRange(rental.startDate) &&
+          _matchesReportSupplier(supplier) &&
+          _matchesReportSearch([
+            rental.id,
+            rental.item,
+            supplier,
+            rental.siteName,
+            rental.tankId,
+            rental.operatorName,
+          ]);
+    }).toList()
+      ..sort((a, b) => b.startDate.compareTo(a.startDate));
+  }
+
+  List<InternalTransferHistoryRecord> get _filteredTransferReports {
+    return _visibleInternalTransferHistory.where((record) {
+      final source = _transferItems.where((item) => item.id == record.id || item.name == record.itemName);
+      final supplier = source.isNotEmpty
+          ? _supplierNameForTransferItem(source.first)
+          : _supplierNameFromRentalId(record.rentalId);
+      return _dateInReportRange(record.date) &&
+          _matchesReportSupplier(supplier) &&
+          _matchesReportSearch([
+            record.id,
+            record.itemName,
+            record.batchId,
+            record.rentalId,
+            record.thavvuId,
+            record.toThavvuId,
+            record.transferredTo,
+            supplier,
+          ]);
+    }).toList();
+  }
+
+  String _supplierNameFromRentalId(String rentalId) {
+    final item = _supplierPaymentItems.where((entry) => entry.rentalId == rentalId);
+    if (item.isNotEmpty) return item.first.supplierName;
+    final transfer = _transferItems.where((entry) => entry.rentalId == rentalId);
+    if (transfer.isNotEmpty) return _supplierNameForTransferItem(transfer.first);
+    return 'Rental Supplier';
+  }
+
+  List<Map<String, dynamic>> get _filteredReturnReports {
+    return _closedRentals.where((record) {
+      final supplier = _supplierNameForClosedRental(record);
+      final dateText = (record['endDate'] ?? record['startDate'] ?? '').toString();
+      return _stringDateInReportRange(dateText) &&
+          _matchesReportSupplier(supplier) &&
+          _matchesReportSearch([
+            (record['id'] ?? '').toString(),
+            (record['item'] ?? '').toString(),
+            supplier,
+            (record['status'] ?? '').toString(),
+            (record['payment'] ?? '').toString(),
+          ]);
+    }).toList();
+  }
+
+  List<RentalPaymentTransaction> get _filteredRentalPaymentTransactions {
+    return _rentalPaymentLedger.where((txn) {
+      final linkedName = txn.machineName ?? '';
+      final supplier = linkedName.isEmpty
+          ? (_selectedPaymentSupplier ?? 'Rental Supplier')
+          : _supplierNameFromLinkedPaymentName(linkedName);
+      return _dateInReportRange(txn.date) &&
+          _matchesReportSupplier(supplier) &&
+          _matchesReportSearch([
+            txn.id,
+            txn.method,
+            txn.status,
+            txn.note ?? '',
+            linkedName,
+            supplier,
+          ]);
+    }).toList()
+      ..sort((a, b) => b.date.compareTo(a.date));
+  }
+
+  String _supplierNameFromLinkedPaymentName(String linkedName) {
+    final rental = _activeRentals.where((entry) => entry.item == linkedName || entry.id == linkedName);
+    if (rental.isNotEmpty) return _supplierNameForRental(rental.first);
+    final history = _supplierPaymentHistory.where((entry) => entry.itemName == linkedName);
+    if (history.isNotEmpty) return history.first.supplierName;
+    return _selectedPaymentSupplier ?? 'Rental Supplier';
+  }
+
+  List<SupplierPaymentHistoryRecord> get _filteredSupplierPaymentReports {
+    return _supplierPaymentHistory.where((record) {
+      return _dateInReportRange(record.createdAt) &&
+          _matchesReportSupplier(record.supplierName) &&
+          _matchesReportSearch([
+            record.id,
+            record.supplierName,
+            record.itemName,
+            record.batchId,
+            record.rentalId,
+            record.paymentMethod,
+            record.paymentReference,
+            record.noteDetails,
+          ]);
+    }).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+
+  Widget _buildComputedSupplierPaymentSummaryTable() {
+    final visibleItems = _visibleSupplierPaymentItems;
+    if (visibleItems.isEmpty) {
+      return _buildSectionCard(
+        title: 'Computed Payment Summary',
+        subtitle: 'Running balance summary appears after supplier items are available.',
+        icon: Icons.calculate_outlined,
+        color: AppTheme.info,
+        child: _buildPaymentEmptyState(
+          icon: Icons.table_chart_outlined,
+          title: 'No rows to calculate',
+          message: 'Internal transfer items create supplier payment rows automatically.',
+        ),
+      );
+    }
+
+    return _buildSectionCard(
+      title: 'Computed Payment Summary',
+      subtitle:
+          'Status is calculated from total amount, amount paid, and running balance. Existing payment methods are unchanged.',
+      icon: Icons.table_chart_outlined,
+      color: AppTheme.info,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: DataTable(
+          headingRowHeight: 42,
+          dataRowMinHeight: 54,
+          dataRowMaxHeight: 68,
+          columnSpacing: 18,
+          columns: const [
+            DataColumn(label: Text('Supplier')),
+            DataColumn(label: Text('Item')),
+            DataColumn(label: Text('Start')),
+            DataColumn(label: Text('Days')),
+            DataColumn(label: Text('Qty')),
+            DataColumn(label: Text('Rate')),
+            DataColumn(label: Text('Total')),
+            DataColumn(label: Text('Paid')),
+            DataColumn(label: Text('Balance')),
+            DataColumn(label: Text('Status')),
+          ],
+          rows: visibleItems.map((item) {
+            final days = _daysBetween(item.startDate);
+            final total = item.amountFor(qty: item.takenQty, endDate: DateTime.now());
+            final paid = _supplierPaymentHistory
+                .where((record) => record.id.contains(item.id) ||
+                    (record.itemName == item.itemName && record.rentalId == item.rentalId))
+                .fold<double>(0, (sum, record) => sum + record.amount);
+            final balance = total - paid;
+            final status = _computedPaymentStatus(
+              totalAmount: total,
+              paidAmount: paid,
+            );
+            return DataRow(
+              cells: [
+                DataCell(Text(item.supplierName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                DataCell(Text(item.itemName, style: const TextStyle(fontSize: 12))),
+                DataCell(Text(_formatDate(item.startDate), style: const TextStyle(fontSize: 12))),
+                DataCell(Text('$days', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
+                DataCell(Text('${item.takenQty}', style: const TextStyle(fontSize: 12))),
+                DataCell(Text(_formatMoney(item.ratePerDay), style: const TextStyle(fontSize: 12))),
+                DataCell(Text(_formatMoney(total), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
+                DataCell(Text(_formatMoney(paid), style: const TextStyle(fontSize: 12, color: AppTheme.success, fontWeight: FontWeight.w800))),
+                DataCell(Text(_formatMoney(math.max(balance, 0)), style: TextStyle(fontSize: 12, color: balance > 0 ? AppTheme.danger : AppTheme.success, fontWeight: FontWeight.w900))),
+                DataCell(_computedPaymentStatusChip(status)),
+              ],
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReportsTab() {
+    return DefaultTabController(
+      length: 4,
+      child: Column(
+        children: [
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _buildHeader(
+                  emoji: '📊',
+                  title: 'Supervisor Reports',
+                  subtitle:
+                      'Rental, transfer, return, and payment reports with date, supplier, and search filters',
+                  accent: AppTheme.primary,
+                ),
+                const SizedBox(height: 16),
+                _buildReportsFilterBar(),
+                const SizedBox(height: 16),
+                Container(
+                  color: AppTheme.surface,
+                  child: const TabBar(
+                    isScrollable: true,
+                    labelColor: AppTheme.primary,
+                    unselectedLabelColor: AppTheme.textSecondary,
+                    indicatorColor: AppTheme.primary,
+                    indicatorWeight: 2.5,
+                    labelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+                    tabs: [
+                      Tab(text: 'Rental', icon: Icon(Icons.handyman_outlined)),
+                      Tab(text: 'Transfer', icon: Icon(Icons.swap_horiz)),
+                      Tab(text: 'Return', icon: Icon(Icons.assignment_return_outlined)),
+                      Tab(text: 'Payment', icon: Icon(Icons.payments_outlined)),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  height: 620,
+                  child: TabBarView(
+                    children: [
+                      _buildRentalReportTable(),
+                      _buildTransferReportTable(),
+                      _buildReturnReportTable(),
+                      _buildPaymentReportTable(),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReportsFilterBar() {
+    final suppliers = _reportSupplierNames;
+    final selectedSupplier = _reportSupplierFilter ?? 'All Suppliers';
+    return _buildSectionCard(
+      title: 'Report Filters',
+      subtitle: 'Use shared filters exactly like the Reports reference flow.',
+      icon: Icons.filter_alt_outlined,
+      color: AppTheme.info,
+      child: Column(
+        children: [
+          TextField(
+            controller: _reportSearchController,
+            onChanged: (value) => setState(() => _reportSearch = value),
+            decoration: _inputDecoration(
+              label: 'Search supplier, item, receipt, transfer no, reference',
+              icon: Icons.search_outlined,
+            ).copyWith(
+              suffixIcon: _reportSearch.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () {
+                        _reportSearchController.clear();
+                        setState(() => _reportSearch = '');
+                      },
+                    ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _reportDateTile(
+                  label: 'From Date',
+                  value: _reportFromDateFilter == null
+                      ? 'Any date'
+                      : _formatDate(_reportFromDateFilter!),
+                  icon: Icons.date_range_outlined,
+                  color: AppTheme.primary,
+                  onTap: () async {
+                    final picked = await _pickReportDate(_reportFromDateFilter ?? DateTime.now());
+                    if (picked != null) setState(() => _reportFromDateFilter = picked);
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _reportDateTile(
+                  label: 'To Date',
+                  value: _reportToDateFilter == null
+                      ? 'Any date'
+                      : _formatDate(_reportToDateFilter!),
+                  icon: Icons.event_available_outlined,
+                  color: AppTheme.success,
+                  onTap: () async {
+                    final picked = await _pickReportDate(_reportToDateFilter ?? DateTime.now());
+                    if (picked != null) setState(() => _reportToDateFilter = picked);
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: selectedSupplier,
+            isExpanded: true,
+            decoration: _inputDecoration(
+              label: 'Supplier Filter',
+              icon: Icons.storefront_outlined,
+            ),
+            items: [
+              const DropdownMenuItem<String>(
+                value: 'All Suppliers',
+                child: Text('All Suppliers'),
+              ),
+              ...suppliers.map(
+                (supplier) => DropdownMenuItem<String>(
+                  value: supplier,
+                  child: Text(supplier, overflow: TextOverflow.ellipsis),
+                ),
+              ),
+            ],
+            onChanged: (value) => setState(() {
+              _reportSupplierFilter = value == 'All Suppliers' ? null : value;
+            }),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                _reportSearchController.clear();
+                setState(() {
+                  _reportSearch = '';
+                  _reportFromDateFilter = null;
+                  _reportToDateFilter = null;
+                  _reportSupplierFilter = null;
+                });
+              },
+              icon: const Icon(Icons.clear_all_outlined),
+              label: const Text('Clear Filters'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<DateTime?> _pickReportDate(DateTime initialDate) {
+    return showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2035),
+    );
+  }
+
+  Widget _reportDateTile({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withOpacity(0.18)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                  Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _reportTableShell({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required Widget child,
+  }) {
+    return ListView(
+      padding: const EdgeInsets.only(top: 14),
+      children: [
+        _buildSectionCard(
+          title: title,
+          subtitle: subtitle,
+          icon: icon,
+          color: color,
+          child: child,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRentalReportTable() {
+    final rows = _filteredActiveRentalReports;
+    return _reportTableShell(
+      title: 'Rental Report (${rows.length} records)',
+      subtitle: 'Running rental amount = rate × quantity × running days.',
+      icon: Icons.handyman_outlined,
+      color: AppTheme.danger,
+      child: rows.isEmpty
+          ? _buildPaymentEmptyState(
+              icon: Icons.inventory_2_outlined,
+              title: 'No rental records',
+              message: 'No rentals match the selected filters.',
+            )
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 42,
+                dataRowMinHeight: 58,
+                dataRowMaxHeight: 76,
+                columnSpacing: 18,
+                columns: const [
+                  DataColumn(label: Text('Receipt / ID')),
+                  DataColumn(label: Text('Date')),
+                  DataColumn(label: Text('Supplier')),
+                  DataColumn(label: Text('Village / Site')),
+                  DataColumn(label: Text('Category')),
+                  DataColumn(label: Text('Item')),
+                  DataColumn(label: Text('Qty')),
+                  DataColumn(label: Text('Running')),
+                  DataColumn(label: Text('Daily Rent')),
+                  DataColumn(label: Text('Days')),
+                  DataColumn(label: Text('Total')),
+                  DataColumn(label: Text('Location')),
+                  DataColumn(label: Text('Status')),
+                ],
+                rows: rows.map((rental) {
+                  final supplier = _supplierNameForRental(rental);
+                  final total = _computedRentalTotal(rental);
+                  final paid = _completedPaidForRental(rental);
+                  final payStatus = _computedPaymentStatus(totalAmount: total, paidAmount: paid);
+                  return DataRow(cells: [
+                    DataCell(Text(rental.id, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
+                    DataCell(Text(_formatDate(rental.startDate), style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(supplier, style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(rental.siteName, style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(rental.lineItems.length > 1 ? 'Multiple' : rental.item, style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(rental.item, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                    DataCell(Text('${rental.totalQuantity}', style: const TextStyle(fontSize: 12))),
+                    DataCell(Text('${rental.totalQuantity}', style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(_formatMoney(rental.rate), style: const TextStyle(fontSize: 12))),
+                    DataCell(Text('${_daysBetween(rental.startDate)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
+                    DataCell(Text(_formatMoney(total), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900))),
+                    DataCell(Text(rental.tankId, style: const TextStyle(fontSize: 12))),
+                    DataCell(_computedPaymentStatusChip(payStatus)),
+                  ]);
+                }).toList(),
+              ),
+            ),
+    );
+  }
+
+  Widget _buildTransferReportTable() {
+    final rows = _filteredTransferReports;
+    return _reportTableShell(
+      title: 'Transfer Report (${rows.length} records)',
+      subtitle: 'Internal transfer log with from/to Thavvu point and quantity.',
+      icon: Icons.swap_horiz,
+      color: AppTheme.info,
+      child: rows.isEmpty
+          ? _buildPaymentEmptyState(
+              icon: Icons.swap_horiz,
+              title: 'No transfer records',
+              message: 'No transfer history matches the selected filters.',
+            )
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 42,
+                dataRowMinHeight: 56,
+                dataRowMaxHeight: 72,
+                columnSpacing: 18,
+                columns: const [
+                  DataColumn(label: Text('Transfer No')),
+                  DataColumn(label: Text('Date')),
+                  DataColumn(label: Text('Supplier')),
+                  DataColumn(label: Text('Item')),
+                  DataColumn(label: Text('From')),
+                  DataColumn(label: Text('To')),
+                  DataColumn(label: Text('Qty')),
+                  DataColumn(label: Text('Supervisor')),
+                  DataColumn(label: Text('Reason')),
+                ],
+                rows: rows.map((record) {
+                  final supplier = _supplierNameFromRentalId(record.rentalId);
+                  return DataRow(cells: [
+                    DataCell(Text(record.id, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.info))),
+                    DataCell(Text(_formatDate(record.date), style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(supplier, style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(record.itemName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                    DataCell(Text(record.thavvuId, style: const TextStyle(fontSize: 12, color: AppTheme.danger))),
+                    DataCell(Text(record.toThavvuId.isEmpty ? record.transferredTo : record.toThavvuId, style: const TextStyle(fontSize: 12, color: AppTheme.success))),
+                    DataCell(Text('${record.numberOfItems}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900))),
+                    DataCell(Text(record.submittedBy, style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(record.notes.isEmpty ? '—' : record.notes, style: const TextStyle(fontSize: 12))),
+                  ]);
+                }).toList(),
+              ),
+            ),
+    );
+  }
+
+  Widget _buildReturnReportTable() {
+    final rows = _filteredReturnReports;
+    return _reportTableShell(
+      title: 'Return Report (${rows.length} records)',
+      subtitle: 'Closed rentals are shown as return/closure records for supervisor review.',
+      icon: Icons.assignment_return_outlined,
+      color: AppTheme.success,
+      child: rows.isEmpty
+          ? _buildPaymentEmptyState(
+              icon: Icons.assignment_return_outlined,
+              title: 'No return records',
+              message: 'Closed rentals matching your filters will appear here.',
+            )
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 42,
+                dataRowMinHeight: 56,
+                dataRowMaxHeight: 72,
+                columnSpacing: 18,
+                columns: const [
+                  DataColumn(label: Text('Date')),
+                  DataColumn(label: Text('Receipt')),
+                  DataColumn(label: Text('Supplier')),
+                  DataColumn(label: Text('Item')),
+                  DataColumn(label: Text('Return Qty')),
+                  DataColumn(label: Text('From Point')),
+                  DataColumn(label: Text('Remarks')),
+                ],
+                rows: rows.map((record) {
+                  final supplier = _supplierNameForClosedRental(record);
+                  return DataRow(cells: [
+                    DataCell(Text((record['endDate'] ?? '—').toString(), style: const TextStyle(fontSize: 12))),
+                    DataCell(Text((record['id'] ?? '—').toString(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
+                    DataCell(Text(supplier, style: const TextStyle(fontSize: 12))),
+                    DataCell(Text((record['item'] ?? '—').toString(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                    DataCell(Text((record['returnQty'] ?? '1').toString(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900))),
+                    DataCell(Text((record['fromPoint'] ?? 'Closed rental yard').toString(), style: const TextStyle(fontSize: 12))),
+                    DataCell(Text('Closed • Payment: ${(record['payment'] ?? 'Pending')}', style: const TextStyle(fontSize: 12))),
+                  ]);
+                }).toList(),
+              ),
+            ),
+    );
+  }
+
+  Widget _buildPaymentReportTable() {
+    final supplierRows = _filteredSupplierPaymentReports;
+    final txnRows = _filteredRentalPaymentTransactions;
+    final totalCount = supplierRows.length + txnRows.length;
+
+    return _reportTableShell(
+      title: 'Payment Report ($totalCount records)',
+      subtitle: 'Includes supplier payment closures and existing cash/advance request ledger.',
+      icon: Icons.payments_outlined,
+      color: AppTheme.warning,
+      child: totalCount == 0
+          ? _buildPaymentEmptyState(
+              icon: Icons.receipt_long_outlined,
+              title: 'No payment records',
+              message: 'Payment records matching your filters will appear here.',
+            )
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 42,
+                dataRowMinHeight: 58,
+                dataRowMaxHeight: 78,
+                columnSpacing: 18,
+                columns: const [
+                  DataColumn(label: Text('Date')),
+                  DataColumn(label: Text('Supplier')),
+                  DataColumn(label: Text('Receipt / Item')),
+                  DataColumn(label: Text('Amount')),
+                  DataColumn(label: Text('Mode')),
+                  DataColumn(label: Text('Reference')),
+                  DataColumn(label: Text('Remarks')),
+                  DataColumn(label: Text('Status')),
+                ],
+                rows: [
+                  ...supplierRows.map((record) {
+                    return DataRow(cells: [
+                      DataCell(Text(_formatDate(record.createdAt), style: const TextStyle(fontSize: 12))),
+                      DataCell(Text(record.supplierName, style: const TextStyle(fontSize: 12))),
+                      DataCell(Text(record.itemName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                      DataCell(Text(_formatMoney(record.amount), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppTheme.success))),
+                      DataCell(Text(record.paymentMethod, style: const TextStyle(fontSize: 12))),
+                      DataCell(Text(record.paymentReference.isEmpty ? '—' : record.paymentReference, style: const TextStyle(fontSize: 12))),
+                      DataCell(Text(record.noteDetails.isEmpty ? record.noteType : record.noteDetails, style: const TextStyle(fontSize: 12))),
+                      DataCell(_computedPaymentStatusChip(record.status)),
+                    ]);
+                  }),
+                  ...txnRows.map((txn) {
+                    final supplier = _supplierNameFromLinkedPaymentName(txn.machineName ?? '');
+                    return DataRow(cells: [
+                      DataCell(Text(_formatDate(txn.date), style: const TextStyle(fontSize: 12))),
+                      DataCell(Text(supplier, style: const TextStyle(fontSize: 12))),
+                      DataCell(Text(txn.machineName ?? txn.id, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                      DataCell(Text(_formatMoney(txn.amount), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppTheme.success))),
+                      DataCell(Text(txn.method, style: const TextStyle(fontSize: 12))),
+                      DataCell(Text(txn.id, style: const TextStyle(fontSize: 12))),
+                      DataCell(Text(txn.note ?? '—', style: const TextStyle(fontSize: 12))),
+                      DataCell(_computedPaymentStatusChip(txn.status)),
+                    ]);
+                  }),
+                ],
+              ),
+            ),
+    );
+  }
+
   // =========================
   // Build
   // =========================
@@ -2847,39 +6353,36 @@ class _RentalScreenState extends State<RentalScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.surface,
-      appBar: AppBar(
-        title: const Text('Rental Management'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: AppTheme.primary,
-          unselectedLabelColor: AppTheme.textSecondary,
-          indicatorColor: AppTheme.primary,
-          indicatorWeight: 2.5,
-          isScrollable: true,
-          labelStyle: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) => [
+          buildCollapsibleAppBar(
+            title: 'Rental Management',
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.pop(context),
+            ),
+            controller: _tabController,
+            tabs: const [
+              Tab(text: 'Open Rental'),
+              Tab(text: 'Active Rentals'),
+              Tab(text: 'Internal Transfer'),
+              Tab(text: 'Payment'),
+              Tab(text: 'Closed Rentals'),
+              Tab(text: 'Reports'),
+            ],
           ),
-          tabs: const [
-            Tab(text: 'Open Rental', icon: Icon(Icons.add_circle_outline)),
-            Tab(text: 'Active Rentals', icon: Icon(Icons.playlist_add_check)),
-            Tab(text: 'Internal Transfer', icon: Icon(Icons.swap_horiz)),
-            Tab(text: 'Closed Rentals', icon: Icon(Icons.history)),
+        ],
+        body: TabBarView(
+          controller: _tabController,
+          children: [
+            _buildOpenRentalTab(),
+            _buildActiveRentalsTab(),
+            _buildInternalTransferTab(),
+            _buildPaymentTab(),
+            _buildClosedRentalsTab(),
+            _buildReportsTab(),
           ],
         ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildOpenRentalTab(),
-          _buildActiveRentalsTab(),
-          _buildInternalTransferTab(),
-          _buildClosedRentalsTab(),
-        ],
       ),
     );
   }
@@ -2914,20 +6417,13 @@ class _RentalScreenState extends State<RentalScreen>
           const SizedBox(height: 16),
           _buildRentalCard(
             step: 2,
-            title: 'Rate & Billing Configuration',
-            color: AppTheme.warning,
-            child: _buildRateAndBilling(),
-          ),
-          const SizedBox(height: 16),
-          _buildRentalCard(
-            step: 3,
             title: 'Advance Payment Option',
             color: AppTheme.primary,
             child: _buildAdvancePayment(),
           ),
           const SizedBox(height: 16),
           _buildRentalCard(
-            step: 4,
+            step: 3,
             title: 'Fuel & Additional Notes',
             color: AppTheme.info,
             child: _buildFuelAndNotes(),
@@ -2936,11 +6432,11 @@ class _RentalScreenState extends State<RentalScreen>
           _buildFinancialPreview(),
           const SizedBox(height: 20),
           _buildSubmitButton(
-            'Open Rental Record',
-            AppTheme.danger,
+            'Proceed to Active Rentals',
+            AppTheme.success,
             _openRental,
             _isOpening,
-            Icons.add,
+            Icons.play_circle_fill,
           ),
           const SizedBox(height: 16),
         ],
@@ -2949,12 +6445,11 @@ class _RentalScreenState extends State<RentalScreen>
   }
 
   // =========================
-  // Active rentals
+  // Active rentals (unchanged)
   // =========================
 
   Widget _buildActiveRentalsTab() {
-    final sortedRentals = [..._activeRentals]
-      ..sort((a, b) {
+    final sortedRentals = [..._activeRentals]..sort((a, b) {
         final aRank = a.isActivated ? 0 : 1;
         final bRank = b.isActivated ? 0 : 1;
         if (aRank != bRank) return aRank.compareTo(bRank);
@@ -2967,7 +6462,8 @@ class _RentalScreenState extends State<RentalScreen>
         _buildHeader(
           emoji: '🟢',
           title: 'Machine Rentals',
-          subtitle: 'View machine status, check-ins, tank entry, activation, and fuel logs',
+          subtitle:
+              'View machine status, check-ins, tank entry, activation, and fuel logs',
           accent: AppTheme.success,
         ),
         const SizedBox(height: 16),
@@ -3186,6 +6682,11 @@ class _RentalScreenState extends State<RentalScreen>
               runSpacing: 8,
               children: [
                 _buildInfoPill(
+                  '${rental.lineItems.length} item(s) • Qty ${rental.totalQuantity}',
+                  AppTheme.danger,
+                  icon: Icons.inventory_2_outlined,
+                ),
+                _buildInfoPill(
                   rental.siteName,
                   AppTheme.success,
                   icon: Icons.place_outlined,
@@ -3291,8 +6792,9 @@ class _RentalScreenState extends State<RentalScreen>
                     ),
                     label: Text(rental.isActivated ? 'Open' : 'Activate'),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor:
-                          rental.isActivated ? AppTheme.primary : AppTheme.success,
+                      foregroundColor: rental.isActivated
+                          ? AppTheme.primary
+                          : AppTheme.success,
                       side: BorderSide(
                         color: rental.isActivated
                             ? AppTheme.primary
@@ -3307,8 +6809,9 @@ class _RentalScreenState extends State<RentalScreen>
                 const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed:
-                        rental.isActivated ? () => _continueRental(rental) : null,
+                    onPressed: rental.isActivated
+                        ? () => _continueRental(rental)
+                        : null,
                     icon: const Icon(Icons.update, size: 18),
                     label: const Text('Continue'),
                     style: ElevatedButton.styleFrom(
@@ -3384,36 +6887,1916 @@ class _RentalScreenState extends State<RentalScreen>
   }
 
   // =========================
-  // Internal transfer
+  // Internal transfer (unchanged)
   // =========================
 
   Widget _buildInternalTransferTab() {
+    return DefaultTabController(
+      length: 4,
+      child: Column(
+        children: [
+          Container(
+            color: AppTheme.surface,
+            child: const TabBar(
+              isScrollable: true,
+              labelColor: AppTheme.primary,
+              unselectedLabelColor: AppTheme.textSecondary,
+              indicatorColor: AppTheme.primary,
+              indicatorWeight: 2.5,
+              labelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              tabs: [
+                Tab(
+                  text: 'MS & WE',
+                  icon: Icon(Icons.precision_manufacturing_outlined),
+                ),
+                Tab(
+                  text: 'Receiving',
+                  icon: Icon(Icons.inbox_outlined),
+                ),
+                Tab(
+                  text: 'Vehicles',
+                  icon: Icon(Icons.local_shipping_outlined),
+                ),
+                Tab(
+                  text: 'History',
+                  icon: Icon(Icons.calendar_month_outlined),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _buildMsWeTransferTab(),
+                _buildReceivingTab(),
+                _buildVehiclesTransferTab(),
+                _buildInternalTransferHistoryTab(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReceivingTab() {
+    final incomingTransfers = _internalTransferHistory.where((record) {
+      return record.toThavvuId.isNotEmpty ||
+          record.status.contains('Receive') ||
+          record.status == 'Received';
+    }).toList();
+
+    final pendingCount =
+        incomingTransfers.where((r) => r.status == 'Pending Receive').length;
+    final receivedCount =
+        incomingTransfers.where((r) => r.status == 'Received').length;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _buildHeader(
+          emoji: '📥',
+          title: 'Receiving Internal Transfers',
+          subtitle:
+              'View & confirm machines or work equipment transferred by other supervisors in real-time',
+          accent: AppTheme.success,
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricCard(
+                'Pending',
+                pendingCount.toString(),
+                Icons.hourglass_top_outlined,
+                AppTheme.warning,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildMetricCard(
+                'Received',
+                receivedCount.toString(),
+                Icons.check_circle_outline,
+                AppTheme.success,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildMetricCard(
+                'Total',
+                incomingTransfers.length.toString(),
+                Icons.swap_horiz,
+                AppTheme.info,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (incomingTransfers.isEmpty)
+          _buildEmptyState(
+            icon: Icons.inbox_outlined,
+            title: 'No incoming transfers',
+            subtitle:
+                'Transfers sent to you by other supervisors will appear here.',
+          )
+        else
+          ...incomingTransfers.map(_buildReceivingCard),
+      ],
+    );
+  }
+
+  Widget _buildReceivingCard(InternalTransferHistoryRecord record) {
+    final isPending = record.status == 'Pending Receive';
+    final isReceived = record.status == 'Received';
+
+    return GestureDetector(
+      onTap: () => _showReceivingDetailSheet(record),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isPending
+                ? AppTheme.warning.withOpacity(0.5)
+                : isReceived
+                    ? AppTheme.success.withOpacity(0.35)
+                    : AppTheme.border,
+            width: isPending ? 1.4 : 0.8,
+          ),
+          boxShadow: AppTheme.mediumShadow,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header row: status chip + date + tap hint
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isPending
+                        ? AppTheme.warning.withOpacity(0.12)
+                        : isReceived
+                            ? AppTheme.success.withOpacity(0.12)
+                            : AppTheme.info.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isPending
+                            ? Icons.hourglass_top_outlined
+                            : isReceived
+                                ? Icons.check_circle_outline
+                                : Icons.info_outline,
+                        size: 14,
+                        color: isPending
+                            ? AppTheme.warning
+                            : isReceived
+                                ? AppTheme.success
+                                : AppTheme.info,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        record.status,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: isPending
+                              ? AppTheme.warning
+                              : isReceived
+                                  ? AppTheme.success
+                                  : AppTheme.info,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Row(
+                  children: [
+                    Text(
+                      _formatDate(record.date),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.chevron_right,
+                        size: 16, color: AppTheme.textSecondary),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Item icon + name + batch
+            Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    record.transferType == 'Machine Equipment' ||
+                            record.transferType == 'Machine'
+                        ? Icons.precision_manufacturing_outlined
+                        : Icons.handyman_outlined,
+                    color: AppTheme.primary,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        record.itemName,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Batch: ${record.batchId} • Qty: ${record.numberOfItems}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // Sender row (compact)
+            Row(
+              children: [
+                const Icon(Icons.person_pin_outlined,
+                    size: 14, color: AppTheme.primary),
+                const SizedBox(width: 4),
+                Text(
+                  'From ${record.submittedBy}',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textSecondary),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6),
+                  child: Icon(Icons.arrow_forward,
+                      size: 12, color: AppTheme.textSecondary),
+                ),
+                Text(
+                  record.toThavvuId.isNotEmpty
+                      ? record.toThavvuId
+                      : 'Your Site',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.success),
+                ),
+              ],
+            ),
+            if (isReceived && record.receiverName != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTheme.success.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.success.withOpacity(0.2)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.verified_outlined,
+                        size: 14, color: AppTheme.success),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Received by ${record.receiverName} — ${record.receivedQty ?? record.numberOfItems} items',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.success),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (isPending) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _showReceivingDetailSheet(record),
+                      icon: const Icon(Icons.visibility_outlined, size: 16),
+                      label: const Text('View Details'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.info,
+                        side: const BorderSide(color: AppTheme.info),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _showConfirmReceiptDialog(record),
+                      icon: const Icon(Icons.check_circle, size: 16),
+                      label: const Text('Confirm Receipt'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.success,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showReceivingDetailSheet(InternalTransferHistoryRecord record) {
+    final isPending = record.status == 'Pending Receive';
+    final isReceived = record.status == 'Received';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        maxChildSize: 0.95,
+        minChildSize: 0.4,
+        expand: false,
+        builder: (context, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              // Handle bar
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: AppTheme.primary.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Icon(
+                        record.transferType == 'Machine Equipment' ||
+                                record.transferType == 'Machine'
+                            ? Icons.precision_manufacturing_outlined
+                            : Icons.handyman_outlined,
+                        color: AppTheme.primary,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            record.itemName,
+                            style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.textPrimary),
+                          ),
+                          Text(
+                            '${record.transferType} • ${record.batchId}',
+                            style: const TextStyle(
+                                fontSize: 12, color: AppTheme.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isPending
+                            ? AppTheme.warning.withOpacity(0.12)
+                            : isReceived
+                                ? AppTheme.success.withOpacity(0.12)
+                                : AppTheme.info.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        record.status,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: isPending
+                              ? AppTheme.warning
+                              : isReceived
+                                  ? AppTheme.success
+                                  : AppTheme.info,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              // Scrollable body
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.all(20),
+                  children: [
+                    // Transfer info block
+                    _buildDetailSection(
+                      title: 'Transfer Information',
+                      icon: Icons.swap_horiz,
+                      color: AppTheme.primary,
+                      rows: [
+                        _buildDetailRow('Transfer ID', record.id),
+                        _buildDetailRow('Transfer Date', _formatDate(record.date)),
+                        _buildDetailRow('Transfer Type', record.transferType),
+                        _buildDetailRow('Rental ID', record.rentalId),
+                        _buildDetailRow('Batch ID', record.batchId),
+                        _buildDetailRow('Quantity', '${record.numberOfItems} items'),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Sender / route block
+                    _buildDetailSection(
+                      title: 'Transfer Route',
+                      icon: Icons.route_outlined,
+                      color: AppTheme.info,
+                      rows: [
+                        _buildDetailRow('Sent by', record.submittedBy),
+                        _buildDetailRow('From Site', record.thavvuId),
+                        _buildDetailRow(
+                            'To Site',
+                            record.toThavvuId.isNotEmpty
+                                ? record.toThavvuId
+                                : 'Your Site'),
+                        _buildDetailRow('Transferred To', record.transferredTo),
+                      ],
+                    ),
+                    if (record.notes.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      _buildDetailSection(
+                        title: 'Notes / Remarks',
+                        icon: Icons.notes_outlined,
+                        color: AppTheme.warning,
+                        rows: [
+                          _buildDetailRow('Remarks', record.notes),
+                        ],
+                      ),
+                    ],
+                    if (isReceived && record.receiverName != null) ...[
+                      const SizedBox(height: 16),
+                      _buildDetailSection(
+                        title: 'Receipt Confirmation',
+                        icon: Icons.verified_outlined,
+                        color: AppTheme.success,
+                        rows: [
+                          _buildDetailRow('Received by', record.receiverName!),
+                          _buildDetailRow(
+                              'Received on',
+                              _formatDate(
+                                  record.receivedDate ?? record.date)),
+                          _buildDetailRow('Quantity Received',
+                              '${record.receivedQty ?? record.numberOfItems} items'),
+                          if (record.receiverNotes != null &&
+                              record.receiverNotes!.isNotEmpty)
+                            _buildDetailRow(
+                                'Inspection Notes', record.receiverNotes!),
+                        ],
+                      ),
+                    ],
+                    if (isPending) ...[
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _showConfirmReceiptDialog(record);
+                          },
+                          icon: const Icon(Icons.check_circle, size: 18),
+                          label: const Text('Confirm Receipt'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.success,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailSection({
+    required String title,
+    required IconData icon,
+    required Color color,
+    required List<Widget> rows,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.15)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...rows,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppTheme.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppTheme.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+
+  void _showConfirmReceiptDialog(InternalTransferHistoryRecord record) {
+    final receiverNameCtrl = TextEditingController(text: 'Supervisor (You)');
+    final qtyCtrl =
+        TextEditingController(text: record.numberOfItems.toString());
+    final notesCtrl = TextEditingController();
+    String selectedCondition = 'Received in Good Condition';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  color: AppTheme.surface,
+                  borderRadius:
+                      BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.inventory, color: AppTheme.success),
+                            SizedBox(width: 8),
+                            Text(
+                              'Confirm Receipt',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                    const Divider(),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Confirming receipt for: ${record.itemName}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                    Text(
+                      'Sent by ${record.submittedBy} from ${record.thavvuId}',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: receiverNameCtrl,
+                      decoration: _inputDecoration(
+                        label: 'Receiver Name',
+                        icon: Icons.person_outline,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: qtyCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: _inputDecoration(
+                        label: 'Quantity Received',
+                        icon: Icons.numbers,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      value: selectedCondition,
+                      decoration: _inputDecoration(
+                        label: 'Condition / Status',
+                        icon: Icons.verified_outlined,
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'Received in Good Condition',
+                          child: Text('Received in Good Condition'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'Partial Quantity Received',
+                          child: Text('Partial Quantity Received'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'Damaged / Defective',
+                          child: Text('Damaged / Defective'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'Rejected',
+                          child: Text('Rejected'),
+                        ),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setModalState(() => selectedCondition = val);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: notesCtrl,
+                      decoration: _inputDecoration(
+                        label: 'Inspection Notes / Remarks',
+                        hint: 'e.g. Inspected and stored at Pond 9 shed',
+                        icon: Icons.note_alt_outlined,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          final qty = int.tryParse(qtyCtrl.text.trim()) ??
+                              record.numberOfItems;
+                          setState(() {
+                            record.status = selectedCondition == 'Rejected'
+                                ? 'Rejected'
+                                : 'Received';
+                            record.receiverName =
+                                receiverNameCtrl.text.trim().isNotEmpty
+                                    ? receiverNameCtrl.text.trim()
+                                    : 'Supervisor (You)';
+                            record.receivedDate = DateTime.now();
+                            record.receivedQty = qty;
+                            record.receiverNotes = notesCtrl.text.trim();
+                          });
+                          Navigator.pop(context);
+                          _showSnackbar(
+                            'Receipt confirmed for ${record.itemName} (${record.status}).',
+                            AppTheme.success,
+                          );
+                        },
+                        icon: const Icon(Icons.check),
+                        label: const Text('Submit Confirmation'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.success,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildMsWeTransferTab() {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         _buildHeader(
           emoji: '🔁',
-          title: 'Internal Transfer',
+          title: 'MS & WE Internal Transfer',
           subtitle:
-              'Transfer aqua-farm assets, reconcile returns, map locations, and manage VRI',
+              'Select From Thavvu ID → To Thavvu ID, then select machines or work equipment, attach photo, and submit transfer',
           accent: AppTheme.info,
         ),
         const SizedBox(height: 16),
+        _buildTransferThavvuPrioritySection(),
+        const SizedBox(height: 16),
+        _buildActiveMachineTransferTable(),
+        const SizedBox(height: 16),
+        _buildWorkEquipmentTransferForm(),
+        const SizedBox(height: 16),
+        _buildWorkEquipmentPlanningSection(),
+        const SizedBox(height: 16),
         _buildInternalTransferSummaryCard(),
-        const SizedBox(height: 16),
-        _buildSelectedTransferCard(),
-        const SizedBox(height: 16),
-        _buildTransferBatchSection(TransferAssetKind.material),
-        const SizedBox(height: 16),
-        _buildTransferBatchSection(TransferAssetKind.workEquipment),
-        const SizedBox(height: 16),
-        _buildTransferMapCard(),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  Widget _buildVehiclesTransferTab() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _buildHeader(
+          emoji: '🚚',
+          title: 'Vehicles',
+          subtitle:
+              'Vehicle rental information and VRI entries are maintained separately from MS & WE',
+          accent: AppTheme.warning,
+        ),
         const SizedBox(height: 16),
         _buildVehicleRentalInfoCard(),
         const SizedBox(height: 24),
       ],
     );
   }
+
+  Widget _buildTransferThavvuPrioritySection() {
+    final thavvuIds = _allInternalTransferThavvuIds;
+    final selectedFromThavvu = thavvuIds.contains(_selectedTransferThavvuId)
+        ? _selectedTransferThavvuId
+        : null;
+    final selectedToThavvu = thavvuIds.contains(_toTransferThavvuId)
+        ? _toTransferThavvuId
+        : null;
+
+    return _buildSectionCard(
+      title: '1. From Thavvu ID → To Thavvu ID',
+      subtitle:
+          'First select the source Thavvu ID, then select the destination Thavvu ID. This is a transfer between Thavvu IDs, not a material return.',
+      icon: Icons.compare_arrows_rounded,
+      color: AppTheme.primary,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DropdownButtonFormField<String>(
+            value: selectedFromThavvu,
+            isExpanded: true,
+            decoration: _inputDecoration(
+              label: 'From Thavvu ID',
+              icon: Icons.logout_rounded,
+            ),
+            items: thavvuIds
+                .map(
+                  (id) => DropdownMenuItem<String>(
+                    value: id,
+                    child: Text(id, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: _selectPriorityThavvu,
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: selectedToThavvu,
+            isExpanded: true,
+            decoration: _inputDecoration(
+              label: 'To Thavvu ID',
+              icon: Icons.login_rounded,
+            ),
+            items: thavvuIds
+                .where((id) => id != selectedFromThavvu)
+                .map(
+                  (id) => DropdownMenuItem<String>(
+                    value: id,
+                    child: Text(id, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: _selectToTransferThavvu,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _transferReceiverController,
+            decoration: _inputDecoration(
+              label: 'Receiver Supervisor / Department',
+              icon: Icons.supervisor_account_outlined,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.infoBg,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppTheme.info.withOpacity(0.22)),
+            ),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline, color: AppTheme.info, size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Submit Transfer means items are moved from one Thavvu ID to another Thavvu ID under a supervisor/department. It is not returning items to stock.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textSecondary,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkEquipmentTransferForm() {
+    final batchIds = _workEquipmentBatchIds;
+    final selectedBatch = batchIds.contains(_selectedWorkEquipmentBatchId)
+        ? _selectedWorkEquipmentBatchId
+        : (batchIds.isNotEmpty ? batchIds.first : null);
+    final batchItems = _workEquipmentItemsForSelectedBatch;
+    final selectedItem = _selectedWorkEquipmentTransferItem;
+
+    return _buildSectionCard(
+      title: '3. WE — Work Equipment Transfer',
+      subtitle:
+          'Select batch, number of items, upload photo, add notes, then submit transfer',
+      icon: Icons.handyman_outlined,
+      color: AppTheme.warning,
+      child: batchIds.isEmpty
+          ? _buildEmptyState(
+              icon: Icons.handyman_outlined,
+              title: 'No work equipment found',
+              subtitle:
+                  'Select a different Thavvu ID or submit active machines first.',
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<String>(
+                  value: selectedBatch,
+                  isExpanded: true,
+                  decoration: _inputDecoration(
+                    label: 'Batch',
+                    icon: Icons.layers_outlined,
+                  ),
+                  items: batchIds
+                      .map(
+                        (batch) => DropdownMenuItem<String>(
+                          value: batch,
+                          child: Text(batch, overflow: TextOverflow.ellipsis),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: _selectWorkEquipmentBatch,
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: selectedItem == null ? null : selectedItem.id,
+                  isExpanded: true,
+                  decoration: _inputDecoration(
+                    label: 'Work Equipment Item',
+                    icon: Icons.inventory_2_outlined,
+                  ),
+                  items: batchItems
+                      .map(
+                        (item) => DropdownMenuItem<String>(
+                          value: item.id,
+                          child: Text(
+                            '${item.name} • Remaining ${item.remainingQty}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedWorkEquipmentItemId = value;
+                      _workEquipmentQtyController.text = '1';
+                      _workEquipmentPhotoPath = null;
+                      _workEquipmentNotesController.clear();
+                    });
+                  },
+                ),
+                if (selectedItem != null) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildMiniMetric(
+                          'Total WE',
+                          selectedItem.rentedQty.toString(),
+                          color: AppTheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildMiniMetric(
+                          'Giving',
+                          selectedItem.returnedQty.toString(),
+                          color: AppTheme.success,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildMiniMetric(
+                          'Remaining',
+                          selectedItem.remainingQty.toString(),
+                          color: selectedItem.remainingQty == 0
+                              ? AppTheme.success
+                              : AppTheme.warning,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Number of Items',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.textPrimary,
+                          ),
+                        ),
+                      ),
+                      _buildCounterButton(
+                        icon: Icons.remove,
+                        onTap: () => _changeWorkEquipmentTransferQty(-1),
+                      ),
+                      SizedBox(
+                        width: 72,
+                        child: TextField(
+                          controller: _workEquipmentQtyController,
+                          textAlign: TextAlign.center,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly
+                          ],
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 10,
+                            ),
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      _buildCounterButton(
+                        icon: Icons.add,
+                        onTap: () => _changeWorkEquipmentTransferQty(1),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  GestureDetector(
+                    onTap: _attachWorkEquipmentTransferPhoto,
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: _workEquipmentPhotoPath == null
+                            ? AppTheme.warning.withOpacity(0.08)
+                            : AppTheme.successBg,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: _workEquipmentPhotoPath == null
+                              ? AppTheme.warning.withOpacity(0.22)
+                              : AppTheme.success.withOpacity(0.28),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _workEquipmentPhotoPath == null
+                                ? Icons.add_a_photo_outlined
+                                : Icons.image_outlined,
+                            color: _workEquipmentPhotoPath == null
+                                ? AppTheme.warning
+                                : AppTheme.success,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _workEquipmentPhotoPath == null
+                                  ? 'Upload photo of selected work equipment items'
+                                  : 'Attached: $_workEquipmentPhotoPath',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: _workEquipmentPhotoPath == null
+                                    ? AppTheme.warning
+                                    : AppTheme.success,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _workEquipmentNotesController,
+                    maxLines: 3,
+                    decoration: _inputDecoration(
+                      label: 'Notes',
+                      icon: Icons.notes_outlined,
+                    ).copyWith(
+                      hintText:
+                          'Example: transferred to Supervisor Ramesh for Pond-A1 night shift',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: selectedItem.remainingQty == 0
+                          ? null
+                          : _submitWorkEquipmentTransfer,
+                      icon: const Icon(Icons.swap_horiz_outlined),
+                      label: const Text('Submit Transfer'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.warning,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+    );
+  }
+
+  Widget _buildInternalTransferHistoryTab() {
+    final records = _visibleInternalTransferHistory;
+    final dateFilter = _internalTransferHistoryDateFilter;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _buildHeader(
+          emoji: '📅',
+          title: 'Internal Transfer History',
+          subtitle:
+              'Detailed table of all machine and work equipment transfers from one Thavvu ID to another Thavvu ID',
+          accent: AppTheme.primary,
+        ),
+        const SizedBox(height: 16),
+        _buildSectionCard(
+          title: 'Calendar / Date Filter',
+          subtitle: dateFilter == null
+              ? 'Showing all internal transfer records'
+              : 'Showing records for ${_formatDate(dateFilter)}',
+          icon: Icons.calendar_month_outlined,
+          color: AppTheme.primary,
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: dateFilter ?? DateTime.now(),
+                      firstDate: DateTime(2024),
+                      lastDate: DateTime(DateTime.now().year + 2),
+                    );
+                    if (picked != null) {
+                      setState(() => _internalTransferHistoryDateFilter = picked);
+                    }
+                  },
+                  icon: const Icon(Icons.event_outlined),
+                  label: Text(
+                    dateFilter == null
+                        ? 'Choose Date'
+                        : _formatDate(dateFilter),
+                  ),
+                ),
+              ),
+              if (dateFilter != null) ...[
+                const SizedBox(width: 10),
+                IconButton(
+                  onPressed: () {
+                    setState(() => _internalTransferHistoryDateFilter = null);
+                  },
+                  icon: const Icon(Icons.close_rounded),
+                  color: AppTheme.danger,
+                  tooltip: 'Clear date filter',
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _buildSectionCard(
+          title: 'Transfer Data Table',
+          subtitle:
+              '${records.length} record(s) • submit transfers are From Thavvu ID → To Thavvu ID, not stock returns',
+          icon: Icons.table_chart_outlined,
+          color: AppTheme.info,
+          child: records.isEmpty
+              ? _buildEmptyState(
+                  icon: Icons.table_chart_outlined,
+                  title: 'No history found',
+                  subtitle: 'Try another date or submit a transfer first.',
+                )
+              : SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: DataTable(
+                    headingRowHeight: 44,
+                    dataRowMinHeight: 58,
+                    dataRowMaxHeight: 72,
+                    columnSpacing: 18,
+                    columns: const [
+                      DataColumn(label: Text('Date')),
+                      DataColumn(label: Text('From Thavvu')),
+                      DataColumn(label: Text('To Thavvu')),
+                      DataColumn(label: Text('Type')),
+                      DataColumn(label: Text('Item')),
+                      DataColumn(label: Text('Batch')),
+                      DataColumn(label: Text('Qty')),
+                      DataColumn(label: Text('Transferred To')),
+                      DataColumn(label: Text('Photo')),
+                      DataColumn(label: Text('Notes')),
+                    ],
+                    rows: records.map((record) {
+                      return DataRow(
+                        cells: [
+                          DataCell(Text(
+                            _formatDate(record.date),
+                            style: const TextStyle(fontSize: 11),
+                          )),
+                          DataCell(Text(record.thavvuId)),
+                          DataCell(Text(record.toThavvuId.trim().isEmpty ? '-' : record.toThavvuId)),
+                          DataCell(_buildInfoPill(
+                            record.transferType,
+                            record.transferType == 'Machine'
+                                ? AppTheme.success
+                                : AppTheme.warning,
+                          )),
+                          DataCell(SizedBox(
+                            width: 180,
+                            child: Text(
+                              record.itemName,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          )),
+                          DataCell(Text(record.batchId)),
+                          DataCell(Text(
+                            record.numberOfItems.toString(),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w900,
+                              color: AppTheme.primary,
+                            ),
+                          )),
+                          DataCell(SizedBox(
+                            width: 160,
+                            child: Text(
+                              record.transferredTo,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          )),
+                          DataCell(Text(
+                            record.photoPath.trim().isEmpty ? 'No' : 'Yes',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              color: record.photoPath.trim().isEmpty
+                                  ? AppTheme.textMuted
+                                  : AppTheme.success,
+                            ),
+                          )),
+                          DataCell(SizedBox(
+                            width: 220,
+                            child: Text(
+                              record.notes.trim().isEmpty ? '-' : record.notes,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          )),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActiveMachineTransferTable() {
+    final machines = _activeMachinesForInternalTransfer;
+
+    return _buildSectionCard(
+      title: '2. MS — Active Machine Selection',
+      subtitle:
+          'After From Thavvu ID and To Thavvu ID selection, mark active machines, upload photo proof, and submit transfer',
+      icon: Icons.precision_manufacturing_outlined,
+      color: AppTheme.success,
+      child: machines.isEmpty
+          ? _buildEmptyState(
+              icon: Icons.precision_manufacturing_outlined,
+              title: 'No active machines found',
+              subtitle:
+                  'Open Rental → Active Rentals → Activate machines first. Active machines will then show here.',
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildMiniMetric(
+                        'Active Machines',
+                        machines.length.toString(),
+                        color: AppTheme.success,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildMiniMetric(
+                        'Selected',
+                        _selectedMachineTransferCount.toString(),
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildMiniMetric(
+                        'Transfer Qty',
+                        _selectedMachineTransferTotalQty.toString(),
+                        color: AppTheme.warning,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceCard,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppTheme.border),
+                    boxShadow: AppTheme.cardShadow,
+                  ),
+                  clipBehavior: Clip.hardEdge,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: DataTable(
+                      headingRowHeight: 44,
+                      dataRowMinHeight: 62,
+                      dataRowMaxHeight: 74,
+                      columnSpacing: 18,
+                      columns: const [
+                        DataColumn(label: Text('Mark')),
+                        DataColumn(label: Text('Rental ID')),
+                        DataColumn(label: Text('Machine')),
+                        DataColumn(label: Text('Tank / Site')),
+                        DataColumn(label: Text('Available')),
+                        DataColumn(label: Text('Select Qty')),
+                        DataColumn(label: Text('Status')),
+                      ],
+                      rows: machines.map((rental) {
+                        final selected = _selectedMachineTransferRentalIds
+                            .contains(rental.id);
+                        final qty = _selectedMachineTransferQty(rental);
+                        final available = _availableMachineTransferQty(rental);
+                        return DataRow(
+                          selected: selected,
+                          cells: [
+                            DataCell(
+                              Checkbox(
+                                value: selected,
+                                activeColor: AppTheme.success,
+                                onChanged: (value) =>
+                                    _toggleMachineTransferSelection(
+                                  rental,
+                                  value,
+                                ),
+                              ),
+                            ),
+                            DataCell(Text(rental.id)),
+                            DataCell(
+                              SizedBox(
+                                width: 190,
+                                child: Text(
+                                  rental.item,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            DataCell(
+                              SizedBox(
+                                width: 170,
+                                child: Text(
+                                  '${rental.tankId} • ${rental.siteName}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                            DataCell(Text('$available')),
+                            DataCell(
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _buildCounterButton(
+                                    icon: Icons.remove,
+                                    onTap: selected
+                                        ? () => _changeMachineTransferQty(
+                                              rental,
+                                              -1,
+                                            )
+                                        : () {},
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                    ),
+                                    child: Text(
+                                      '$qty',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                  _buildCounterButton(
+                                    icon: Icons.add,
+                                    onTap: selected
+                                        ? () => _changeMachineTransferQty(
+                                              rental,
+                                              1,
+                                            )
+                                        : () {},
+                                  ),
+                                ],
+                              ),
+                            ),
+                            DataCell(
+                              _buildInfoPill(
+                                rental.machineStatus.label,
+                                _machineStatusColor(rental),
+                                icon: rental.machineStatus.icon,
+                              ),
+                            ),
+                          ],
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _buildSelectedMachineTransferReviewTable(),
+                const SizedBox(height: 14),
+                _buildMachineTransferPhotoUpload(),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _allSelectedMachinesConfirmed
+                        ? _submitMachineTransferSelection
+                        : null,
+                    icon: const Icon(Icons.send_outlined),
+                    label: Text(
+                      _selectedMachineTransferRentalIds.isEmpty
+                          ? 'Select Machines to Submit Transfer'
+                          : !_allSelectedMachinesConfirmed
+                              ? 'Check Selected Machines to Proceed'
+                              : 'Submit Transfer ($_selectedMachineTransferTotalQty machines)',
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.success,
+                      disabledBackgroundColor: AppTheme.border,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildSelectedMachineTransferReviewTable() {
+    final selectedMachines = _selectedMachineTransferRentals;
+    if (selectedMachines.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppTheme.info.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppTheme.info.withOpacity(0.20)),
+        ),
+        child: const Row(
+          children: [
+            Icon(Icons.fact_check_outlined, color: AppTheme.info, size: 18),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Selected machines will appear here as a checklist table before transfer submission.',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _allSelectedMachinesConfirmed
+              ? AppTheme.success.withOpacity(0.28)
+              : AppTheme.warning.withOpacity(0.30),
+        ),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+            child: Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: AppTheme.success.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.playlist_add_check_circle_outlined,
+                    color: AppTheme.success,
+                    size: 19,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Selected Machines Review Table',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Check each selected machine here. Transfer proceeds only after all selected machines are confirmed. Confirmed: $_confirmedMachineTransferCount/${selectedMachines.length}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              headingRowHeight: 42,
+              dataRowMinHeight: 58,
+              dataRowMaxHeight: 74,
+              columnSpacing: 18,
+              columns: const [
+                DataColumn(label: Text('Check')),
+                DataColumn(label: Text('Rental ID')),
+                DataColumn(label: Text('Machine')),
+                DataColumn(label: Text('From')),
+                DataColumn(label: Text('To')),
+                DataColumn(label: Text('Qty')),
+                DataColumn(label: Text('Tank')),
+                DataColumn(label: Text('Status')),
+                DataColumn(label: Text('Remove')),
+              ],
+              rows: selectedMachines.map((rental) {
+                final confirmed =
+                    _confirmedMachineTransferRentalIds.contains(rental.id);
+                final qty = _selectedMachineTransferQty(rental);
+                return DataRow(
+                  selected: confirmed,
+                  cells: [
+                    DataCell(
+                      Checkbox(
+                        value: confirmed,
+                        activeColor: AppTheme.success,
+                        onChanged: (value) =>
+                            _toggleMachineTransferConfirmation(rental, value),
+                      ),
+                    ),
+                    DataCell(Text(rental.id)),
+                    DataCell(
+                      SizedBox(
+                        width: 190,
+                        child: Text(
+                          rental.item,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ),
+                    DataCell(Text(_selectedTransferThavvuId ?? '-')),
+                    DataCell(Text(_toTransferThavvuId ?? '-')),
+                    DataCell(
+                      Text(
+                        '$qty',
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                    DataCell(
+                      SizedBox(
+                        width: 140,
+                        child: Text(
+                          rental.tankId,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      _buildInfoPill(
+                        confirmed ? 'Checked' : 'Need check',
+                        confirmed ? AppTheme.success : AppTheme.warning,
+                        icon: confirmed
+                            ? Icons.verified_outlined
+                            : Icons.pending_actions_outlined,
+                      ),
+                    ),
+                    DataCell(
+                      IconButton(
+                        tooltip: 'Remove from selected machines',
+                        icon: const Icon(Icons.close_rounded, size: 18),
+                        color: AppTheme.danger,
+                        onPressed: () =>
+                            _toggleMachineTransferSelection(rental, false),
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _allSelectedMachinesConfirmed
+                    ? AppTheme.successBg
+                    : AppTheme.warningBg,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _allSelectedMachinesConfirmed
+                        ? Icons.check_circle_outline
+                        : Icons.info_outline,
+                    color: _allSelectedMachinesConfirmed
+                        ? AppTheme.success
+                        : AppTheme.warning,
+                    size: 17,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _allSelectedMachinesConfirmed
+                          ? 'All selected machines checked. You can upload proof and proceed with internal transfer.'
+                          : 'Check every selected machine in this table before proceeding with internal transfer.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: _allSelectedMachinesConfirmed
+                            ? AppTheme.success
+                            : AppTheme.warning,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMachineTransferPhotoUpload() {
+    return GestureDetector(
+      onTap: _attachMachineTransferPhoto,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: _machineTransferPhotoPath == null
+              ? AppTheme.success.withOpacity(0.08)
+              : AppTheme.successBg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _machineTransferPhotoPath == null
+                ? AppTheme.success.withOpacity(0.22)
+                : AppTheme.success.withOpacity(0.30),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              _machineTransferPhotoPath == null
+                  ? Icons.add_a_photo_outlined
+                  : Icons.image_outlined,
+              color: AppTheme.success,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                _machineTransferPhotoPath == null
+                    ? 'Upload transfer photo proof for selected machines'
+                    : 'Attached: $_machineTransferPhotoPath',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.success,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWorkEquipmentPlanningSection() {
+    final groups = _groupTransferItemsByThavvu(TransferAssetKind.workEquipment)
+        .entries
+        .toList();
+
+    return _buildSectionCard(
+      title: 'WE — Work Equipment Batch Planning',
+      subtitle:
+          'Batch-wise view of total WE, giving/transferred quantity, and remaining quantity',
+      icon: Icons.handyman_outlined,
+      color: AppTheme.warning,
+      child: groups.isEmpty
+          ? _buildEmptyState(
+              icon: Icons.handyman_outlined,
+              title: 'No work equipment available',
+              subtitle:
+                  'Submitted active machines and work equipment will appear here batch wise.',
+            )
+          : Column(
+              children: groups.asMap().entries.map((entry) {
+                final index = entry.key;
+                final group = entry.value;
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == groups.length - 1 ? 0 : 12,
+                  ),
+                  child: _buildWorkEquipmentPlanCard(group.key, group.value),
+                );
+              }).toList(),
+            ),
+    );
+  }
+
+  Widget _buildWorkEquipmentPlanCard(
+    String groupKey,
+    List<InternalTransferItem> items,
+  ) {
+    final first = items.first;
+    final totalHave = items.fold(0, (sum, item) => sum + item.rentedQty);
+    final totalGiving = items.fold(0, (sum, item) => sum + item.returnedQty);
+    final totalRemaining = items.fold(0, (sum, item) => sum + item.remainingQty);
+    final double progress = totalHave == 0
+        ? 0.0
+        : (totalGiving / totalHave).clamp(0.0, 1.0).toDouble();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: ExpansionTile(
+        key: PageStorageKey('WE-$groupKey'),
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+        leading: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: AppTheme.warning.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(Icons.handyman_outlined, color: AppTheme.warning),
+        ),
+        title: Text(
+          'Batch ${first.batchId}',
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          'Rental ${first.rentalId} • ${items.length} WE item(s)',
+          style: const TextStyle(fontSize: 12),
+        ),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _buildMiniMetric(
+                  'Total WE',
+                  totalHave.toString(),
+                  color: AppTheme.primary,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildMiniMetric(
+                  'Giving / Transferred',
+                  totalGiving.toString(),
+                  color: AppTheme.success,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildMiniMetric(
+                  'Remaining',
+                  totalRemaining.toString(),
+                  color: totalRemaining == 0
+                      ? AppTheme.success
+                      : AppTheme.warning,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 8,
+              backgroundColor: AppTheme.warning.withOpacity(0.12),
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(AppTheme.success),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Giving progress: ${(progress * 100).toStringAsFixed(0)}% • Remaining for us: $totalRemaining',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ...items.map(_buildTransferItemCard),
+        ],
+      ),
+    );
+  }
+
 
   Widget _buildInternalTransferSummaryCard() {
     return Container(
@@ -3466,7 +8849,7 @@ class _RentalScreenState extends State<RentalScreen>
                 Colors.orange,
               ),
               _buildStatItem(
-                'Returned',
+                'Transferred',
                 _totalTransferReturned.toString(),
                 Icons.assignment_return_outlined,
                 Colors.green,
@@ -3502,142 +8885,7 @@ class _RentalScreenState extends State<RentalScreen>
     );
   }
 
-  Widget _buildSelectedTransferCard() {
-    final item = _selectedTransferItem;
 
-    return _buildSectionCard(
-      title: 'Selected Transfer',
-      subtitle: 'Tap an equipment row to bind Thavvu ID and Tank ID',
-      icon: Icons.badge_outlined,
-      color: AppTheme.primary,
-      child: item == null
-          ? _buildEmptyState(
-              icon: Icons.touch_app_outlined,
-              title: 'No equipment selected',
-              subtitle: 'Select any transfer equipment to load IDs and details.',
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _buildInfoPill(
-                      item.name,
-                      AppTheme.primary,
-                      icon: Icons.inventory_2_outlined,
-                    ),
-                    _buildInfoPill(
-                      'Batch ${item.batchId}',
-                      AppTheme.info,
-                      icon: Icons.layers_outlined,
-                    ),
-                    _buildInfoPill(
-                      'Rental ${item.rentalId}',
-                      AppTheme.success,
-                      icon: Icons.confirmation_number_outlined,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: _selectedTransferThavvuId,
-                  decoration: _inputDecoration(
-                    label: 'Thavvu ID',
-                    icon: Icons.badge_outlined,
-                  ),
-                  items: item.thavvuIds
-                      .map(
-                        (id) =>
-                            DropdownMenuItem<String>(value: id, child: Text(id)),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    setState(() => _selectedTransferThavvuId = value);
-                  },
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: _selectedTransferTankId,
-                  decoration: _inputDecoration(
-                    label: 'Tank ID',
-                    icon: Icons.propane_tank_outlined,
-                  ),
-                  items: item.tankIds
-                      .map(
-                        (id) =>
-                            DropdownMenuItem<String>(value: id, child: Text(id)),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    setState(() => _selectedTransferTankId = value);
-                  },
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: item.remainingQty == 0
-                        ? AppTheme.successBg
-                        : AppTheme.warningBg,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: item.remainingQty == 0
-                          ? AppTheme.success
-                          : AppTheme.warning,
-                    ),
-                  ),
-                  child: Text(
-                    item.remainingQty == 0
-                        ? 'Return tally matched. This item is fully returned.'
-                        : 'Returned count does not fully tally. ${item.remainingQty} item(s) continue by default and stay chargeable.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: item.remainingQty == 0
-                          ? AppTheme.success
-                          : AppTheme.warning,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-    );
-  }
-
-  Widget _buildTransferBatchSection(TransferAssetKind kind) {
-    final groups = _groupTransferItems(kind).entries.toList();
-
-    return _buildSectionCard(
-      title: '${kind.label} by Batch',
-      subtitle: 'Grouped by batch and linked rental ID',
-      icon: kind.icon,
-      color: kind == TransferAssetKind.material
-          ? AppTheme.info
-          : AppTheme.warning,
-      child: groups.isEmpty
-          ? _buildEmptyState(
-              icon: kind.icon,
-              title: 'No ${kind.label.toLowerCase()}',
-              subtitle: 'Nothing is available in this section.',
-            )
-          : ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: groups.length,
-              itemBuilder: (context, index) {
-                final entry = groups[index];
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == groups.length - 1 ? 0 : 12,
-                  ),
-                  child: _buildTransferBatchGroupCard(entry.key, entry.value),
-                );
-              },
-            ),
-    );
-  }
 
   Widget _buildTransferBatchGroupCard(
     String groupKey,
@@ -3658,8 +8906,7 @@ class _RentalScreenState extends State<RentalScreen>
       child: ExpansionTile(
         key: PageStorageKey(groupKey),
         tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        childrenPadding:
-            const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+        childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
         leading: Container(
           width: 40,
           height: 40,
@@ -3692,16 +8939,15 @@ class _RentalScreenState extends State<RentalScreen>
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: _buildMiniMetric('Returned', totalReturned.toString()),
+                child: _buildMiniMetric('Transferred', totalReturned.toString()),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: _buildMiniMetric(
                   'Chargeable',
                   totalRemaining.toString(),
-                  color: totalRemaining == 0
-                      ? AppTheme.success
-                      : AppTheme.warning,
+                  color:
+                      totalRemaining == 0 ? AppTheme.success : AppTheme.warning,
                 ),
               ),
             ],
@@ -3807,7 +9053,7 @@ class _RentalScreenState extends State<RentalScreen>
                 const SizedBox(width: 8),
                 Expanded(
                   child: _buildMiniMetric(
-                    'Returned',
+                    'Transferred',
                     item.returnedQty.toString(),
                   ),
                 ),
@@ -3827,7 +9073,7 @@ class _RentalScreenState extends State<RentalScreen>
             Row(
               children: [
                 const Text(
-                  'Returned count',
+                  'Transfer count',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -3858,8 +9104,8 @@ class _RentalScreenState extends State<RentalScreen>
             const SizedBox(height: 8),
             Text(
               item.remainingQty == 0
-                  ? 'Tally matched, fully returned.'
-                  : '${item.remainingQty} item(s) continue by default and remain payable.',
+                  ? 'All selected quantity has been transferred.'
+                  : '${item.remainingQty} item(s) remain with this supervisor after transfer.',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -3874,202 +9120,12 @@ class _RentalScreenState extends State<RentalScreen>
     );
   }
 
-  Widget _buildTransferMapCard() {
-    final items = _transferItems;
-
-    return _buildSectionCard(
-      title: 'Location Map',
-      subtitle: 'Map-ready item locations with tap-to-select markers',
-      icon: Icons.map_outlined,
-      color: AppTheme.success,
-      child: items.isEmpty
-          ? _buildEmptyState(
-              icon: Icons.map_outlined,
-              title: 'No map items available',
-              subtitle: 'Transfer items will appear here when loaded.',
-            )
-          : Column(
-              children: [
-                Container(
-                  height: 240,
-                  decoration: BoxDecoration(
-                    color: AppTheme.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppTheme.border),
-                  ),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final latitudes =
-                          items.map((e) => e.location.latitude).toList();
-                      final longitudes =
-                          items.map((e) => e.location.longitude).toList();
-
-                      final minLat = latitudes.reduce(math.min);
-                      final maxLat = latitudes.reduce(math.max);
-                      final minLng = longitudes.reduce(math.min);
-                      final maxLng = longitudes.reduce(math.max);
-
-                      final latRange =
-                          (maxLat - minLat).abs() < 0.000001 ? 1.0 : maxLat - minLat;
-                      final lngRange =
-                          (maxLng - minLng).abs() < 0.000001 ? 1.0 : maxLng - minLng;
-
-                      return Stack(
-                        children: [
-                          const Positioned.fill(
-                            child: CustomPaint(painter: _MapGridPainter()),
-                          ),
-                          Positioned(
-                            left: 12,
-                            top: 12,
-                            child: _buildInfoPill(
-                              'Location Board',
-                              AppTheme.primary,
-                              icon: Icons.layers_outlined,
-                            ),
-                          ),
-                          ...items.map((item) {
-                            final dx = 20 +
-                                ((item.location.longitude - minLng) / lngRange) *
-                                    (constraints.maxWidth - 80);
-                            final dy = 35 +
-                                ((maxLat - item.location.latitude) / latRange) *
-                                    (constraints.maxHeight - 95);
-
-                            final left = dx
-                                .clamp(12.0, constraints.maxWidth - 90.0)
-                                .toDouble();
-                            final top = dy
-                                .clamp(18.0, constraints.maxHeight - 70.0)
-                                .toDouble();
-
-                            final isSelected =
-                                _selectedTransferItem?.id == item.id;
-
-                            return Positioned(
-                              left: left,
-                              top: top,
-                              child: GestureDetector(
-                                onTap: () => _selectTransferItem(item),
-                                child: Column(
-                                  children: [
-                                    Container(
-                                      width: isSelected ? 18 : 14,
-                                      height: isSelected ? 18 : 14,
-                                      decoration: BoxDecoration(
-                                        color: isSelected
-                                            ? AppTheme.danger
-                                            : AppTheme.primary,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: Colors.white,
-                                          width: 2,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    SizedBox(
-                                      width: 88,
-                                      child: Text(
-                                        item.name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: isSelected
-                                              ? FontWeight.w700
-                                              : FontWeight.w500,
-                                          color: isSelected
-                                              ? AppTheme.danger
-                                              : AppTheme.textSecondary,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          }),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (_selectedTransferItem != null)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: AppTheme.surface,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: AppTheme.border),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _selectedTransferItem!.name,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '${_selectedTransferItem!.location.siteName} • ${_selectedTransferItem!.location.address}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: AppTheme.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _buildInfoPill(
-                              'Lat ${_selectedTransferItem!.location.latitude.toStringAsFixed(4)}',
-                              AppTheme.info,
-                              icon: Icons.north_east_outlined,
-                            ),
-                            _buildInfoPill(
-                              'Lng ${_selectedTransferItem!.location.longitude.toStringAsFixed(4)}',
-                              AppTheme.success,
-                              icon: Icons.place_outlined,
-                            ),
-                            if (_selectedTransferThavvuId != null)
-                              _buildInfoPill(
-                                _selectedTransferThavvuId!,
-                                AppTheme.primary,
-                                icon: Icons.badge_outlined,
-                              ),
-                            if (_selectedTransferTankId != null)
-                              _buildInfoPill(
-                                _selectedTransferTankId!,
-                                AppTheme.warning,
-                                icon: Icons.propane_tank_outlined,
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  const Text(
-                    'Tap any map marker or equipment row to view location details.',
-                    style: TextStyle(color: AppTheme.textSecondary),
-                  ),
-              ],
-            ),
-    );
-  }
 
   Widget _buildVehicleRentalInfoCard() {
     return _buildSectionCard(
       title: 'Vehicle Rental Info (VRI)',
-      subtitle: 'Real work entries with HR, WK, TR, and KM billing maintained separately',
+      subtitle:
+          'Real work entries with HR, WK, TR, and KM billing maintained separately',
       icon: Icons.local_shipping_outlined,
       color: AppTheme.warning,
       child: Column(
@@ -4248,8 +9304,7 @@ class _RentalScreenState extends State<RentalScreen>
         key: PageStorageKey('vri_${type.name}'),
         initiallyExpanded: type == VehicleBillingType.hourly,
         tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        childrenPadding:
-            const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+        childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
         leading: Container(
           width: 38,
           height: 38,
@@ -4290,7 +9345,8 @@ class _RentalScreenState extends State<RentalScreen>
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => _showAddVehicleWorkEntrySheet(initialType: type),
+                  onPressed: () =>
+                      _showAddVehicleWorkEntrySheet(initialType: type),
                   icon: const Icon(Icons.assignment_add, size: 18),
                   label: const Text('Add Work Entry'),
                   style: OutlinedButton.styleFrom(
@@ -4349,7 +9405,8 @@ class _RentalScreenState extends State<RentalScreen>
               ),
               items: (selected?.thavvuIds ?? const <String>[])
                   .map(
-                    (id) => DropdownMenuItem<String>(value: id, child: Text(id)),
+                    (id) =>
+                        DropdownMenuItem<String>(value: id, child: Text(id)),
                   )
                   .toList(),
               onChanged: selected == null
@@ -4361,7 +9418,8 @@ class _RentalScreenState extends State<RentalScreen>
             const SizedBox(height: 12),
             TextFormField(
               controller: controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
               decoration: _inputDecoration(
                 label: _usageInputLabel(type),
                 icon: type.icon,
@@ -4431,7 +9489,8 @@ class _RentalScreenState extends State<RentalScreen>
             _buildEmptyState(
               icon: Icons.assignment_outlined,
               title: 'No real work entries yet',
-              subtitle: 'Tap Add Work Entry to save actual ${type.label.toLowerCase()} billing.',
+              subtitle:
+                  'Tap Add Work Entry to save actual ${type.label.toLowerCase()} billing.',
             )
           else
             ...entries.map(_buildVehicleWorkEntryCard),
@@ -4620,8 +9679,1050 @@ class _RentalScreenState extends State<RentalScreen>
   }
 
   // =========================
-  // Closed rentals
+  // Closed rentals (unchanged)
   // =========================
+
+
+  // =========================
+  // Payment tab — UPDATED ORDER
+  // =========================
+
+  Widget _buildPaymentTab() {
+    final suppliers = _supplierNames;
+    if (_selectedPaymentSupplier == null && suppliers.isNotEmpty) {
+      _selectedPaymentSupplier = suppliers.first;
+    }
+    final visibleItems = _visibleSupplierPaymentItems;
+    final openItems = visibleItems.where((item) => !item.isClosed).toList();
+    final closedItems = visibleItems.where((item) => item.isClosed).toList();
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _buildHeader(
+          emoji: '💳',
+          title: 'Supplier Payment',
+          subtitle:
+              'Select supplier, choose machines/items, close quantities, and pay from one plan',
+          accent: AppTheme.success,
+        ),
+        const SizedBox(height: 16),
+        // ---------- Supplier selection moved to TOP ----------
+        _buildSupplierSelectionCard(suppliers),
+        const SizedBox(height: 16),
+        // ---------- Rest of the cards ----------
+        _buildPaymentSummaryCard(),
+        const SizedBox(height: 16),
+        _buildComputedSupplierPaymentSummaryTable(),
+        const SizedBox(height: 16),
+        _buildPaymentViewSwitch(),
+        const SizedBox(height: 16),
+        if (_paymentView == 'Open')
+          _buildSectionCard(
+            title: 'Supplier Machines / Objects',
+            subtitle:
+                'Select one or more machines/items. For partial closure, edit close quantity before payment.',
+            icon: Icons.precision_manufacturing_outlined,
+            color: AppTheme.info,
+            child: openItems.isEmpty
+                ? _buildPaymentEmptyState(
+                    icon: Icons.check_circle_outline,
+                    title: 'No open machines/items',
+                    message: 'All machines/items for this supplier are closed.',
+                  )
+                : Column(
+                    children: [
+                      ...openItems
+                          .map((item) => _buildSupplierSelectablePaymentCard(item))
+                          .toList(),
+                      const SizedBox(height: 10),
+                      _buildSupplierPaymentPlanBar(),
+                    ],
+                  ),
+          ),
+        if (_paymentView == 'Closed')
+          _buildSectionCard(
+            title: 'Closed Machines / Objects',
+            subtitle: 'Fully or partially closed supplier machines/items.',
+            icon: Icons.fact_check_outlined,
+            color: AppTheme.success,
+            child: closedItems.isEmpty
+                ? _buildPaymentEmptyState(
+                    icon: Icons.history_toggle_off_outlined,
+                    title: 'No closed items yet',
+                    message: 'Closed items will appear here after payment closure.',
+                  )
+                : Column(
+                    children: closedItems
+                        .map((item) => _buildSupplierSelectablePaymentCard(item))
+                        .toList(),
+                  ),
+          ),
+        if (_paymentView == 'History') _buildPaymentHistoryCard(),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+
+  Widget _buildPaymentViewSwitch() {
+    const tabs = [
+      {'label': 'Open', 'icon': Icons.pending_actions_outlined},
+      {'label': 'Closed', 'icon': Icons.fact_check_outlined},
+      {'label': 'History', 'icon': Icons.history_edu_outlined},
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+        boxShadow: AppTheme.subtleShadow,
+      ),
+      child: Row(
+        children: tabs.map((tab) {
+          final label = tab['label'] as String;
+          final icon = tab['icon'] as IconData;
+          final selected = _paymentView == label;
+          return Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() => _paymentView = label),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: selected ? AppTheme.primary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      icon,
+                      size: 16,
+                      color: selected ? Colors.white : AppTheme.textSecondary,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: selected ? Colors.white : AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildPaymentSummaryCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0F766E), Color(0xFF22C55E)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Payment Overview',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _paymentSummaryMetric(
+                  'Open Items',
+                  '$_supplierOpenItemCount',
+                  Icons.pending_actions_outlined,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _paymentSummaryMetric(
+                  'Closed',
+                  '$_supplierClosedItemCount',
+                  Icons.verified_outlined,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _paymentSummaryMetric(
+                  'Payable',
+                  _formatMoney(_supplierPaymentOpenAmount),
+                  Icons.currency_rupee,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _paymentSummaryMetric(String label, String value, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.18)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: Colors.white, size: 18),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white70, fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- UPDATED: Supplier selection card with Add Supplier ----------
+  Widget _buildSupplierSelectionCard(List<String> suppliers) {
+    return _buildSectionCard(
+      title: 'Supplier Name',
+      subtitle: 'Select or add a supplier to view their payment items',
+      icon: Icons.store_mall_directory_outlined,
+      color: AppTheme.primary,
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextFormField(
+                  controller: _newSupplierController,
+                  decoration: _inputDecoration(
+                    label: 'Add new supplier',
+                    hint: 'Enter supplier name',
+                    icon: Icons.person_add_alt_1_outlined,
+                  ),
+                  onFieldSubmitted: (_) => _addCustomSupplier(_newSupplierController.text),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: () => _addCustomSupplier(_newSupplierController.text),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (suppliers.isEmpty)
+            _buildPaymentEmptyState(
+              icon: Icons.storefront_outlined,
+              title: 'No suppliers available',
+              message: 'Add a supplier using the field above or create transfer entries.',
+            )
+          else
+            DropdownButtonFormField<String>(
+              value: _selectedPaymentSupplier,
+              isExpanded: true,
+              decoration: _inputDecoration(
+                label: 'Select Supplier',
+                icon: Icons.person_pin_circle_outlined,
+              ),
+              items: suppliers
+                  .map(
+                    (supplier) => DropdownMenuItem<String>(
+                      value: supplier,
+                      child: Text(supplier, overflow: TextOverflow.ellipsis),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() {
+                  _selectedPaymentSupplier = value;
+                  _clearSupplierPaymentSelection();
+                });
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSupplierSelectablePaymentCard(SupplierPaymentItem item) {
+    final color = _paymentStatusColor(item);
+    final days = math.max(DateTime.now().difference(item.startDate).inDays, 1);
+    final selected = _selectedSupplierPaymentItemIds.contains(item.id);
+    final closeQty = _draftCloseQtyForSupplierItem(item);
+    final payable = item.amountFor(qty: item.openQty, endDate: DateTime.now());
+    final planAmount = item.amountFor(qty: closeQty, endDate: DateTime.now());
+    final canEdit = !item.isClosed;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: selected ? AppTheme.info.withOpacity(0.06) : AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: selected ? AppTheme.info : color.withOpacity(0.18),
+          width: selected ? 1.4 : 1,
+        ),
+        boxShadow: AppTheme.subtleShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (canEdit)
+                Checkbox(
+                  value: selected,
+                  activeColor: AppTheme.info,
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == true) {
+                        _selectedSupplierPaymentItemIds.add(item.id);
+                        _supplierPaymentCloseQtyDraft[item.id] = closeQty;
+                      } else {
+                        _selectedSupplierPaymentItemIds.remove(item.id);
+                        _supplierPaymentCloseQtyDraft.remove(item.id);
+                      }
+                    });
+                  },
+                )
+              else
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: _paymentStatusBg(item),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(Icons.check_circle_outline, color: color, size: 22),
+                ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.itemName,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${item.supplierName} • ${item.batchId} • ${item.rentalId}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _paymentStatusBg(item),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  item.statusLabel,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _paymentMiniMetric('Came', _formatDate(item.startDate))),
+              const SizedBox(width: 8),
+              Expanded(child: _paymentMiniMetric('Days', '$days')),
+              const SizedBox(width: 8),
+              Expanded(child: _paymentMiniMetric('Taken', '${item.takenQty}')),
+              const SizedBox(width: 8),
+              Expanded(child: _paymentMiniMetric('Open', '${item.openQty}')),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Rate: ${_formatMoney(item.ratePerDay)}/day • Full open payable: ${_formatMoney(payable)}',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    color: AppTheme.textSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (canEdit && !selected)
+                ElevatedButton.icon(
+                  onPressed: () => _showCloseSupplierItemSheet(item),
+                  icon: const Icon(Icons.payments_outlined, size: 15),
+                  label: const Text('Pay This'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.success,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                )
+              else if (canEdit && selected)
+                Container(
+                  width: 126,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Row(
+                    children: [
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            _supplierPaymentCloseQtyDraft[item.id] =
+                                math.max(1, closeQty - 1);
+                          });
+                        },
+                        child: const Icon(Icons.remove_circle_outline,
+                            size: 20, color: AppTheme.warning),
+                      ),
+                      Expanded(
+                        child: Text(
+                          '$closeQty',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                            color: AppTheme.textPrimary,
+                          ),
+                        ),
+                      ),
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            _supplierPaymentCloseQtyDraft[item.id] =
+                                math.min(item.openQty, closeQty + 1);
+                          });
+                        },
+                        child: const Icon(Icons.add_circle_outline,
+                            size: 20, color: AppTheme.success),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          if (selected) ...[
+            const SizedBox(height: 8),
+            _paymentNotice(
+              'Payment plan: close $closeQty now, keep ${item.openQty - closeQty} running, amount ${_formatMoney(planAmount)}',
+              AppTheme.info,
+              Icons.playlist_add_check_circle_outlined,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+
+  Widget _paymentMiniMetric(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        children: [
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 9.5, color: AppTheme.textMuted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPaymentHistoryCard() {
+    final supplier = _selectedPaymentSupplier;
+    final rows = supplier == null
+        ? _supplierPaymentHistory
+        : _supplierPaymentHistory
+            .where((record) => record.supplierName == supplier)
+            .toList();
+
+    return _buildSectionCard(
+      title: 'Payment History',
+      subtitle: 'Start date, end date, amount, days, and closure status.',
+      icon: Icons.history_edu_outlined,
+      color: AppTheme.warning,
+      child: rows.isEmpty
+          ? _buildPaymentEmptyState(
+              icon: Icons.receipt_long_outlined,
+              title: 'No payment history yet',
+              message: 'Close an item to create a payment history record.',
+            )
+          : Column(
+              children: rows.map(_buildPaymentHistoryTile).toList(),
+            ),
+    );
+  }
+
+  Widget _buildPaymentHistoryTile(SupplierPaymentHistoryRecord record) {
+    final isClosed = record.remainingQty == 0;
+    final color = isClosed ? AppTheme.success : AppTheme.warning;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.receipt_long_outlined, size: 18, color: color),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  record.itemName,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ),
+              Text(
+                _formatMoney(record.amount),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${record.batchId} • Qty ${record.closedQty} • ${record.days} days • ${record.paymentMethod}',
+            style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${_formatDate(record.startDate)} → ${_formatDate(record.endDate)} • ${record.status}',
+            style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w700),
+          ),
+          if (record.paymentReference.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Ref: ${record.paymentReference}',
+              style: const TextStyle(fontSize: 10.5, color: AppTheme.textMuted),
+            ),
+          ],
+          if (record.noteDetails.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceCard,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Text(
+                '${record.noteType}: ${record.noteDetails}',
+                style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPaymentEmptyState({
+    required IconData icon,
+    required String title,
+    required String message,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: AppTheme.textMuted, size: 28),
+          const SizedBox(height: 8),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSupplierPaymentPlanBar() {
+    final selectedItems = _selectedSupplierPaymentItems;
+    final totalAmount = _supplierPaymentPlanAmount;
+    final selectedCount = selectedItems.length;
+    final selectedQty = _supplierPaymentPlanQuantity;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: selectedItems.isEmpty ? AppTheme.surface : AppTheme.successBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: selectedItems.isEmpty
+              ? AppTheme.border
+              : AppTheme.success.withOpacity(0.28),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                selectedItems.isEmpty
+                    ? Icons.touch_app_outlined
+                    : Icons.playlist_add_check_circle_outlined,
+                color: selectedItems.isEmpty ? AppTheme.textMuted : AppTheme.success,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  selectedItems.isEmpty
+                      ? 'Select machines/items above to create a payment plan.'
+                      : '$selectedCount selected • Close qty $selectedQty • Pay ${_formatMoney(totalAmount)}',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                    color: selectedItems.isEmpty
+                        ? AppTheme.textSecondary
+                        : AppTheme.success,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (selectedItems.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _showSupplierPaymentPlanSheet,
+                icon: const Icon(Icons.payments_outlined, size: 18),
+                label: const Text('Continue to Payment Plan'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.success,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _showCloseSupplierItemSheet(SupplierPaymentItem item) {
+    setState(() {
+      _selectedSupplierPaymentItemIds
+        ..clear()
+        ..add(item.id);
+      _supplierPaymentCloseQtyDraft[item.id] = item.openQty;
+    });
+    _showSupplierPaymentPlanSheet();
+  }
+
+  void _showSupplierPaymentPlanSheet() {
+    final selectedItems = _selectedSupplierPaymentItems;
+    if (selectedItems.isEmpty) {
+      _showSnackbar('Select at least one machine/item to pay.', AppTheme.warning);
+      return;
+    }
+
+    final planQtyById = <String, int>{
+      for (final item in selectedItems) item.id: _draftCloseQtyForSupplierItem(item),
+    };
+    final endDate = DateTime.now();
+    final planAmount = selectedItems.fold<double>(0, (sum, item) {
+      final qty = planQtyById[item.id] ?? 0;
+      return sum + item.amountFor(qty: qty, endDate: endDate);
+    });
+
+    _activeSupplierPaymentPlanQtyById = Map<String, int>.from(planQtyById);
+    _activeSupplierPaymentPlanEndDate = endDate;
+    _activeSupplierPaymentPlanNoteType = _supplierPaymentNoteType;
+    _activeSupplierPaymentPlanNote = _supplierPaymentNoteController.text.trim();
+    _cashAmountController.text = planAmount.toStringAsFixed(0);
+    _advanceAmountController.text = planAmount.toStringAsFixed(0);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surfaceCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, sheetSetState) {
+          double amountForPlan() {
+            return selectedItems.fold<double>(0, (sum, item) {
+              final qty = planQtyById[item.id] ?? 0;
+              return sum + item.amountFor(qty: qty, endDate: endDate);
+            });
+          }
+
+          final totalAmount = amountForPlan();
+          final totalQty = planQtyById.values.fold<int>(0, (sum, qty) => sum + qty);
+
+          void syncActivePlan() {
+            _activeSupplierPaymentPlanQtyById = Map<String, int>.from(planQtyById);
+            _activeSupplierPaymentPlanEndDate = endDate;
+            _activeSupplierPaymentPlanNoteType = _supplierPaymentNoteType;
+            _activeSupplierPaymentPlanNote = _supplierPaymentNoteController.text.trim();
+          }
+
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                18,
+                18,
+                18,
+                18 + MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildSheetHeader(
+                    title: 'Supplier Payment Plan',
+                    subtitle: 'Confirm machines/items, note details, and complete payment',
+                    icon: Icons.payments_outlined,
+                    color: AppTheme.success,
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppTheme.successBg,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppTheme.success.withOpacity(0.20)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _selectedPaymentSupplier ?? 'Selected supplier',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w900,
+                            color: AppTheme.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(child: _paymentMiniMetric('Objects', '${selectedItems.length}')),
+                            const SizedBox(width: 8),
+                            Expanded(child: _paymentMiniMetric('Close Qty', '$totalQty')),
+                            const SizedBox(width: 8),
+                            Expanded(child: _paymentMiniMetric('Amount', _formatMoney(totalAmount))),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  ...selectedItems.map((item) {
+                    final closeQty = planQtyById[item.id] ?? item.openQty;
+                    final amount = item.amountFor(qty: closeQty, endDate: endDate);
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item.itemName,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${item.batchId} • Came ${_formatDate(item.startDate)} • Open ${item.openQty}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(child: _paymentMiniMetric('Pay Qty', '$closeQty')),
+                              const SizedBox(width: 8),
+                              Expanded(child: _paymentMiniMetric('Keep', '${item.openQty - closeQty}')),
+                              const SizedBox(width: 8),
+                              Expanded(child: _paymentMiniMetric('Amount', _formatMoney(amount))),
+                              const SizedBox(width: 8),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: AppTheme.surfaceCard,
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(color: AppTheme.border),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      visualDensity: VisualDensity.compact,
+                                      icon: const Icon(Icons.remove, size: 18),
+                                      onPressed: () {
+                                        sheetSetState(() {
+                                          planQtyById[item.id] = math.max(1, closeQty - 1);
+                                          _supplierPaymentCloseQtyDraft[item.id] =
+                                              planQtyById[item.id]!;
+                                          final updatedAmount = amountForPlan();
+                                          _cashAmountController.text =
+                                              updatedAmount.toStringAsFixed(0);
+                                          _advanceAmountController.text =
+                                              updatedAmount.toStringAsFixed(0);
+                                          syncActivePlan();
+                                        });
+                                      },
+                                    ),
+                                    IconButton(
+                                      visualDensity: VisualDensity.compact,
+                                      icon: const Icon(Icons.add, size: 18),
+                                      onPressed: () {
+                                        sheetSetState(() {
+                                          planQtyById[item.id] =
+                                              math.min(item.openQty, closeQty + 1);
+                                          _supplierPaymentCloseQtyDraft[item.id] =
+                                              planQtyById[item.id]!;
+                                          final updatedAmount = amountForPlan();
+                                          _cashAmountController.text =
+                                              updatedAmount.toStringAsFixed(0);
+                                          _advanceAmountController.text =
+                                              updatedAmount.toStringAsFixed(0);
+                                          syncActivePlan();
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: _supplierPaymentNoteType,
+                    decoration: _inputDecoration(
+                      label: 'Note Type',
+                      icon: Icons.note_alt_outlined,
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'Manual Note', child: Text('Manual Note')),
+                      DropdownMenuItem(value: 'Photo Note', child: Text('Photo Note')),
+                      DropdownMenuItem(value: 'Voice Note', child: Text('Voice Note')),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      sheetSetState(() {
+                        _supplierPaymentNoteType = value;
+                        syncActivePlan();
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _supplierPaymentNoteController,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: _inputDecoration(
+                      label: _supplierPaymentNoteType == 'Manual Note'
+                          ? 'Machine/object note'
+                          : '${_supplierPaymentNoteType} reference / remarks',
+                      hint:
+                          'Example: Close machine 1, 2, 3 and keep machine 4, 5 running',
+                      icon: Icons.edit_note_outlined,
+                    ),
+                    onChanged: (_) => syncActivePlan(),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildPaymentSection(),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ).whenComplete(() {
+      _clearActiveSupplierPaymentPlan();
+    });
+  }
+
+  void _completeSupplierPaymentPlan({
+    required Map<String, int> qtyById,
+    required DateTime endDate,
+    required String paymentMethod,
+    required String paymentReference,
+    required String noteType,
+    required String noteDetails,
+  }) {
+    final now = DateTime.now();
+
+    setState(() {
+      qtyById.forEach((itemId, requestedQty) {
+        final index = _supplierPaymentItems.indexWhere((item) => item.id == itemId);
+        if (index == -1) return;
+        final item = _supplierPaymentItems[index];
+        if (item.isClosed) return;
+
+        final actualCloseQty = requestedQty.clamp(1, item.openQty).toInt();
+        final amount = item.amountFor(qty: actualCloseQty, endDate: endDate);
+
+        item.closedQty = (item.closedQty + actualCloseQty).clamp(0, item.takenQty);
+        item.lastPaymentMethod = paymentMethod;
+        item.paymentStatus = item.isClosed ? 'Closed' : 'Partial Open';
+
+        final transferIndex = _transferItems.indexWhere(
+          (transferItem) => transferItem.id == item.transferItemId,
+        );
+        if (transferIndex != -1) {
+          _transferItems[transferIndex].returnedQty = item.closedQty;
+        }
+
+        _supplierPaymentHistory.insert(
+          0,
+          SupplierPaymentHistoryRecord(
+            id: 'PAY-${now.millisecondsSinceEpoch}-${item.id}',
+            supplierName: item.supplierName,
+            itemName: item.itemName,
+            batchId: item.batchId,
+            rentalId: item.rentalId,
+            startDate: item.startDate,
+            endDate: endDate,
+            closedQty: actualCloseQty,
+            remainingQty: item.openQty,
+            amount: amount,
+            paymentMethod: paymentMethod,
+            status: item.isClosed ? 'Closed' : 'Partial Closed',
+            createdAt: now,
+            paymentReference: paymentReference,
+            noteType: noteType,
+            noteDetails: noteDetails,
+          ),
+        );
+      });
+
+      _clearSupplierPaymentSelection();
+    });
+  }
+
 
   Widget _buildClosedRentalsTab() {
     return ListView(
@@ -4753,8 +10854,7 @@ class _RentalScreenState extends State<RentalScreen>
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: AppTheme.successBg,
                   borderRadius: BorderRadius.circular(20),
@@ -4794,7 +10894,7 @@ class _RentalScreenState extends State<RentalScreen>
   }
 
   // =========================
-  // Reusable UI
+  // Reusable UI (mostly unchanged)
   // =========================
 
   Widget _buildHeader({
@@ -5164,22 +11264,265 @@ class _RentalScreenState extends State<RentalScreen>
   }
 
   Widget _buildItemDetails() {
+    final draftItems = _currentDraftRentalItems();
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextFormField(
-          controller: _itemController,
-          validator: (value) {
-            if (value == null || value.trim().isEmpty) {
-              return 'Please enter item name';
-            }
-            return null;
-          },
+        // 1. Supplier Name & Village Name fields
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: _supplierNameController,
+                decoration: _inputDecoration(
+                  label: 'Supplier Name',
+                  hint: 'Enter supplier name',
+                  icon: Icons.person_outline,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextFormField(
+                controller: _villageNameController,
+                decoration: _inputDecoration(
+                  label: 'Village Name',
+                  hint: 'Enter village location',
+                  icon: Icons.location_city_outlined,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // 2. Equipment Type Dropdown
+        DropdownButtonFormField<String>(
+          value: _selectedEquipmentType,
           decoration: _inputDecoration(
-            label: 'Item Name',
-            hint: 'Enter rented equipment name',
-            icon: Icons.build_outlined,
+            label: 'Equipment Type',
+            icon: Icons.category_outlined,
+          ),
+          items: const [
+            DropdownMenuItem(
+              value: 'Machine Equipment',
+              child: Text('Machine Equipment (MS)'),
+            ),
+            DropdownMenuItem(
+              value: 'Work Equipment',
+              child: Text('Work Equipment (WE)'),
+            ),
+          ],
+          onChanged: (val) {
+            if (val != null) {
+              setState(() => _selectedEquipmentType = val);
+            }
+          },
+        ),
+        const SizedBox(height: 16),
+
+        // 3. New Feature for Adding Item (Workflow: Category/Item -> Quantity -> Price -> Day/Hour Rent Option)
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppTheme.primary.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppTheme.primary.withOpacity(0.18)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.playlist_add, size: 20, color: AppTheme.primary),
+                  SizedBox(width: 8),
+                  Text(
+                    'Add Rental Item & Details',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _itemController,
+                decoration: _inputDecoration(
+                  label: 'Rental Item Name / Category',
+                  hint: 'Select or enter rental item name',
+                  icon: Icons.build_outlined,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 2,
+                    child: TextFormField(
+                      controller: _itemQuantityController,
+                      keyboardType: TextInputType.number,
+                      decoration: _inputDecoration(
+                        label: 'Quantity',
+                        icon: Icons.numbers,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 3,
+                    child: TextFormField(
+                      controller: _itemPriceController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: _inputDecoration(
+                        label: 'Price (₹)',
+                        hint: 'Rent rate amount',
+                        icon: Icons.currency_rupee,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Rent Unit Option',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setState(() => _selectedItemRentUnit = 'Per day'),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: _selectedItemRentUnit == 'Per day'
+                              ? AppTheme.primary.withOpacity(0.12)
+                              : AppTheme.surface,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: _selectedItemRentUnit == 'Per day'
+                                ? AppTheme.primary
+                                : AppTheme.border,
+                            width: _selectedItemRentUnit == 'Per day' ? 1.4 : 0.8,
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            'Per Day',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: _selectedItemRentUnit == 'Per day'
+                                  ? FontWeight.w800
+                                  : FontWeight.w600,
+                              color: _selectedItemRentUnit == 'Per day'
+                                  ? AppTheme.primary
+                                  : AppTheme.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setState(() => _selectedItemRentUnit = 'Per hour'),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: _selectedItemRentUnit == 'Per hour'
+                              ? AppTheme.primary.withOpacity(0.12)
+                              : AppTheme.surface,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: _selectedItemRentUnit == 'Per hour'
+                                ? AppTheme.primary
+                                : AppTheme.border,
+                            width: _selectedItemRentUnit == 'Per hour' ? 1.4 : 0.8,
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            'Per Hour',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: _selectedItemRentUnit == 'Per hour'
+                                  ? FontWeight.w800
+                                  : FontWeight.w600,
+                              color: _selectedItemRentUnit == 'Per hour'
+                                  ? AppTheme.primary
+                                  : AppTheme.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _addDraftRentalItem,
+                  icon: const Icon(Icons.add_circle_outline, size: 18),
+                  label: const Text('Add Item'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
+        if (draftItems.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Added Rental Items',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppTheme.success.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${draftItems.length} items',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.success,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...draftItems.map(_buildDraftRentalItemTile),
+        ],
         const SizedBox(height: 12),
         TextFormField(
           initialValue: _formatDate(DateTime.now()),
@@ -5189,210 +11532,340 @@ class _RentalScreenState extends State<RentalScreen>
             icon: Icons.calendar_today_outlined,
           ),
         ),
+        const SizedBox(height: 12),
+        _buildRentalUploadButtons(),
       ],
     );
   }
 
-  Widget _buildRateAndBilling() {
-    const billingModes = ['Per day', 'Per hour'];
+  Widget _buildDraftRentalItemTile(RentalLineItem item) {
+    final hasPrice = item.price > 0;
+    final total = item.totalPrice;
 
-    return Column(
-      children: [
-        const Text(
-          'Billing Mode',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: AppTheme.textSecondary,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+        boxShadow: AppTheme.subtleShadow,
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.primary.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              item.equipmentType == 'Machine Equipment'
+                  ? Icons.precision_manufacturing_outlined
+                  : Icons.handyman_outlined,
+              size: 20,
+              color: AppTheme.primary,
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: billingModes.map((mode) {
-            final isSelected = _billingMode == mode;
-            final isLast = mode == billingModes.last;
-
-            return Expanded(
-              child: Padding(
-                padding: EdgeInsets.only(right: isLast ? 0 : 8),
-                child: GestureDetector(
-                  onTap: () => setState(() => _billingMode = mode),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    decoration: BoxDecoration(
-                      gradient: isSelected
-                          ? LinearGradient(
-                              colors: [
-                                AppTheme.danger,
-                                AppTheme.danger.withOpacity(0.80),
-                              ],
-                            )
-                          : null,
-                      color: isSelected ? null : AppTheme.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: isSelected ? AppTheme.danger : AppTheme.border,
-                        width: isSelected ? 0 : 0.8,
-                      ),
-                    ),
-                    child: Text(
-                      mode,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: isSelected
-                            ? Colors.white
-                            : AppTheme.textSecondary,
-                      ),
-                    ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.name,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-              ),
-            );
-          }).toList(),
-        ),
-        const SizedBox(height: 16),
-        TextFormField(
-          controller: _rateController,
-          keyboardType: TextInputType.number,
-          validator: (value) {
-            if (value == null || value.trim().isEmpty) {
-              return 'Please enter rate';
-            }
-            if (double.tryParse(value) == null) {
-              return 'Enter a valid number';
-            }
-            return null;
-          },
-          decoration: _inputDecoration(
-            label:
-                'Rate per ${_billingMode == 'Per day' ? 'day' : 'hour'} (₹)',
-            icon: Icons.currency_rupee,
-            suffixText: _billingMode == 'Per day' ? '/day' : '/hour',
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppTheme.secondary.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        item.equipmentType,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.secondary,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      'Qty: ${item.quantity}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                    if (hasPrice)
+                      Text(
+                        '• ₹${item.price.toStringAsFixed(0)} / ${item.rentUnit.toLowerCase().replaceAll("per ", "")}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
-          onChanged: (_) => setState(() {}),
+          if (hasPrice)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Text(
+                '₹${total.toStringAsFixed(0)}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.success,
+                ),
+              ),
+            ),
+          IconButton(
+            onPressed: () => _removeDraftRentalItem(item),
+            icon: const Icon(Icons.delete_outline, size: 20, color: AppTheme.danger),
+            tooltip: 'Remove item',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRentalUploadButtons() {
+    return Row(
+      children: [
+        Expanded(
+          child: _uploadButton(
+            label: _rentalOpeningPhotoPath == null
+                ? 'Upload Photo'
+                : 'Photo Added',
+            icon: _rentalOpeningPhotoPath == null
+                ? Icons.camera_alt_outlined
+                : Icons.check_circle_outline,
+            color: _rentalOpeningPhotoPath == null
+                ? AppTheme.info
+                : AppTheme.success,
+            onTap: () => _toggleRentalUpload('opening_photo'),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _uploadButton(
+            label: _rentalBillPhotoPath == null ? 'Add Bill' : 'Bill Added',
+            icon: _rentalBillPhotoPath == null
+                ? Icons.receipt_long_outlined
+                : Icons.check_circle_outline,
+            color: _rentalBillPhotoPath == null
+                ? AppTheme.warning
+                : AppTheme.success,
+            onTap: () => _toggleRentalUpload('rental_bill'),
+          ),
         ),
       ],
     );
   }
 
+
+  // This is the main advance payment UI that was replaced
   Widget _buildAdvancePayment() {
-    const modes = ['UPI', 'Cash', 'Digital'];
-
-    IconData iconForMode(String mode) {
-      switch (mode) {
-        case 'UPI':
-          return Icons.qr_code;
-        case 'Cash':
-          return Icons.money;
-        case 'Digital':
-          return Icons.phone_android;
-      }
-      return Icons.payments;
-    }
-
     return Column(
       children: [
-        TextFormField(
-          controller: _advanceAmountController,
-          keyboardType: TextInputType.number,
-          validator: (value) {
-            if (value == null || value.trim().isEmpty) {
-              return 'Please enter advance amount';
-            }
-            if (double.tryParse(value) == null) {
-              return 'Enter a valid number';
-            }
-            return null;
-          },
-          decoration: _inputDecoration(
-            label: 'Advance Amount (₹)',
-            hint: 'Enter advance payment received',
-            icon: Icons.payments_outlined,
-            suffixText: '₹',
-          ),
-          onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'Advance Payment Mode',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: AppTheme.textSecondary,
-          ),
-        ),
-        const SizedBox(height: 8),
         Row(
-          children: modes.map((mode) {
-            final isSelected = _advancePaymentMode == mode;
-            final isLast = mode == modes.last;
-
-            return Expanded(
-              child: Padding(
-                padding: EdgeInsets.only(right: isLast ? 0 : 8),
-                child: GestureDetector(
-                  onTap: () => setState(() => _advancePaymentMode = mode),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? AppTheme.primary.withOpacity(0.15)
-                          : AppTheme.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color:
-                            isSelected ? AppTheme.primary : AppTheme.border,
-                        width: isSelected ? 1.5 : 0.8,
-                      ),
+          children: [
+            Expanded(
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Advance Request',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text('Request advance from finance'),
+                value: _enableAdvancePayment,
+                activeColor: AppTheme.success,
+                onChanged: (val) =>
+                    setState(() => _enableAdvancePayment = val),
+              ),
+            ),
+            GestureDetector(
+              onTap: () =>
+                  _showTransactionHistorySheet('advance'),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTheme.success.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: AppTheme.success.withOpacity(0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.request_quote_outlined,
+                        size: 14, color: AppTheme.success),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_advanceTransactions.length} request${_advanceTransactions.length == 1 ? "" : "s"}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.success),
                     ),
-                    child: Column(
-                      children: [
-                        Icon(
-                          iconForMode(mode),
-                          color: isSelected
-                              ? AppTheme.primary
-                              : AppTheme.textMuted,
-                          size: 20,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          mode,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: isSelected
-                                ? AppTheme.primary
-                                : AppTheme.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  ],
                 ),
               ),
-            );
-          }).toList(),
+            ),
+            const SizedBox(width: 4),
+          ],
         ),
+        if (_enableAdvancePayment) ...[
+          const SizedBox(height: 8),
+          _buildAdvancePaymentSection(),
+        ],
+        const SizedBox(height: 12),
+        _buildAdvanceRequestTable(),
       ],
+    );
+  }
+
+  // Remaining helper widgets (unchanged from original)
+
+  Widget _paymentNotice(String text, Color color, IconData icon) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(fontSize: 11, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rentalPaymentOption({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? color.withOpacity(0.1) : AppTheme.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? color : AppTheme.border,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, size: 28, color: selected ? color : AppTheme.textMuted),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: selected ? color : AppTheme.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _rentalStatusChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: color),
+      ),
+    );
+  }
+
+  Widget _rentalProofPreview(String proofId) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.successBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.success.withOpacity(0.22)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 28,
+            height: 24,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: AppTheme.success.withOpacity(0.25)),
+            ),
+            child: const Icon(Icons.image_outlined, size: 16, color: AppTheme.success),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            proofId,
+            style: const TextStyle(fontSize: 11, color: AppTheme.success, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildFuelAndNotes() {
     return Column(
       children: [
-        TextFormField(
-          controller: _fuelController,
-          keyboardType: TextInputType.number,
-          decoration: _inputDecoration(
-            label: 'Fuel Consumed (₹)',
-            hint: 'Diesel/petrol as running total',
-            icon: Icons.local_gas_station_outlined,
-            suffixText: '₹',
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text(
+            'Fuel Entry',
+            style: TextStyle(fontWeight: FontWeight.w800),
           ),
-          onChanged: (_) => setState(() {}),
+          subtitle:
+              const Text('Turn on only when this rental has diesel/fuel entry'),
+          value: _rentalFuelEnabled,
+          activeColor: AppTheme.warning,
+          onChanged: (value) => setState(() => _rentalFuelEnabled = value),
         ),
+        if (_rentalFuelEnabled) ...[
+          const SizedBox(height: 10),
+          _buildRentalFuelEntryForm(),
+        ],
         const SizedBox(height: 12),
         TextFormField(
           controller: _notesController,
@@ -5404,6 +11877,111 @@ class _RentalScreenState extends State<RentalScreen>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildRentalFuelEntryForm() {
+    const fuelTypes = ['Diesel', 'Petrol', 'Oil', 'AdBlue'];
+    const stockPoints = [
+      'Main Diesel Stock',
+      'Site Stock Point',
+      'Vehicle Tank',
+      'Outside Purchase',
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.warningBg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.warning.withOpacity(0.25)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _rentalFuelType,
+                  isExpanded: true,
+                  decoration: _inputDecoration(
+                    label: 'Type of Fuel',
+                    icon: Icons.local_gas_station,
+                  ),
+                  items: fuelTypes
+                      .map((type) =>
+                          DropdownMenuItem(value: type, child: Text(type)))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _rentalFuelType = value);
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _rentalFuelStockPoint,
+                  isExpanded: true,
+                  decoration: _inputDecoration(
+                    label: 'Stock Point',
+                    icon: Icons.location_on_outlined,
+                  ),
+                  items: stockPoints
+                      .map((point) =>
+                          DropdownMenuItem(value: point, child: Text(point)))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _rentalFuelStockPoint = value);
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextFormField(
+                  controller: _fuelLitresController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: _inputDecoration(
+                    label: 'Liters',
+                    icon: Icons.straighten,
+                    suffixText: 'L',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextFormField(
+                  controller: _fuelController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: _inputDecoration(
+                    label: 'Amount',
+                    icon: Icons.currency_rupee,
+                    suffixText: '₹',
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _fuelRemarksController,
+            maxLines: 2,
+            decoration: _inputDecoration(
+              label: 'Fuel Remarks',
+              hint: 'Fuel bill, stock issue, or tank note',
+              icon: Icons.notes_outlined,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -5735,6 +12313,46 @@ class _RentalScreenState extends State<RentalScreen>
     );
   }
 
+  Widget _buildMetricCard(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textSecondary,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatItem(
     String label,
     String value,
@@ -5766,6 +12384,10 @@ class _RentalScreenState extends State<RentalScreen>
   }
 }
 
+// =========================
+// MachineRentalDetailPage (unchanged)
+// =========================
+
 class MachineRentalDetailPage extends StatefulWidget {
   final RentalItem rental;
   final VoidCallback onUpdated;
@@ -5783,7 +12405,8 @@ class MachineRentalDetailPage extends StatefulWidget {
   });
 
   @override
-  State<MachineRentalDetailPage> createState() => _MachineRentalDetailPageState();
+  State<MachineRentalDetailPage> createState() =>
+      _MachineRentalDetailPageState();
 }
 
 class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
@@ -5795,31 +12418,7 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
 
   String _formatMoney(num value) => '₹${value.toStringAsFixed(0)}';
 
-  Color _statusColor() {
-    switch (rental.machineStatus) {
-      case MachineLifecycleStatus.atSite:
-        return AppTheme.warning;
-      case MachineLifecycleStatus.activeInTank:
-        return AppTheme.success;
-      case MachineLifecycleStatus.shiftDone:
-        return AppTheme.info;
-      case MachineLifecycleStatus.closed:
-        return AppTheme.textMuted;
-    }
-  }
 
-  Color _statusBg() {
-    switch (rental.machineStatus) {
-      case MachineLifecycleStatus.atSite:
-        return AppTheme.warningBg;
-      case MachineLifecycleStatus.activeInTank:
-        return AppTheme.successBg;
-      case MachineLifecycleStatus.shiftDone:
-        return AppTheme.info.withOpacity(0.12);
-      case MachineLifecycleStatus.closed:
-        return AppTheme.surface;
-    }
-  }
 
   InputDecoration _inputDecoration({
     required String label,
@@ -5903,7 +12502,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                   children: [
                     _sheetHeader(
                       title: 'Edit Machine Flow',
-                      subtitle: 'Update site, tank, field, operator, and important dates',
+                      subtitle:
+                          'Update site, tank, field, operator, and important dates',
                       icon: Icons.edit_note_outlined,
                       color: AppTheme.primary,
                     ),
@@ -5915,9 +12515,10 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                         hint: 'Example: Bhimavaram Aqua Yard',
                         icon: Icons.place_outlined,
                       ),
-                      validator: (value) => value == null || value.trim().isEmpty
-                          ? 'Enter site name'
-                          : null,
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                              ? 'Enter site name'
+                              : null,
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -5929,9 +12530,10 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                               label: 'Tank / Pond ID',
                               icon: Icons.propane_tank_outlined,
                             ),
-                            validator: (value) => value == null || value.trim().isEmpty
-                                ? 'Enter tank ID'
-                                : null,
+                            validator: (value) =>
+                                value == null || value.trim().isEmpty
+                                    ? 'Enter tank ID'
+                                    : null,
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -5974,9 +12576,12 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                           ? 'Not activated yet'
                           : _formatDate(activationDate!),
                       icon: Icons.play_circle_outline,
-                      color: activationDate == null ? AppTheme.warning : AppTheme.success,
+                      color: activationDate == null
+                          ? AppTheme.warning
+                          : AppTheme.success,
                       onTap: () async {
-                        final picked = await _pickDate(activationDate ?? DateTime.now());
+                        final picked =
+                            await _pickDate(activationDate ?? DateTime.now());
                         if (picked != null) {
                           sheetSetState(() => activationDate = picked);
                         }
@@ -5985,11 +12590,16 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                     const SizedBox(height: 10),
                     _dateTile(
                       title: 'Closed date',
-                      value: closingDate == null ? 'Not closed yet' : _formatDate(closingDate!),
+                      value: closingDate == null
+                          ? 'Not closed yet'
+                          : _formatDate(closingDate!),
                       icon: Icons.lock_outline,
-                      color: closingDate == null ? AppTheme.textMuted : AppTheme.danger,
+                      color: closingDate == null
+                          ? AppTheme.textMuted
+                          : AppTheme.danger,
                       onTap: () async {
-                        final picked = await _pickDate(closingDate ?? DateTime.now());
+                        final picked =
+                            await _pickDate(closingDate ?? DateTime.now());
                         if (picked != null) {
                           sheetSetState(() => closingDate = picked);
                         }
@@ -5998,7 +12608,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                           ? null
                           : IconButton(
                               icon: const Icon(Icons.clear, size: 18),
-                              onPressed: () => sheetSetState(() => closingDate = null),
+                              onPressed: () =>
+                                  sheetSetState(() => closingDate = null),
                             ),
                     ),
                     const SizedBox(height: 18),
@@ -6007,16 +12618,19 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                       AppTheme.primary,
                       Icons.save_outlined,
                       () {
-                        if (!(formKey.currentState?.validate() ?? false)) return;
+                        if (!(formKey.currentState?.validate() ?? false))
+                          return;
                         setState(() {
                           rental.siteName = siteController.text.trim();
                           rental.tankId = tankController.text.trim();
-                          rental.fieldLabel = fieldController.text.trim().isEmpty
-                              ? 'Field not assigned'
-                              : fieldController.text.trim();
-                          rental.operatorName = operatorController.text.trim().isEmpty
-                              ? 'Operator not assigned'
-                              : operatorController.text.trim();
+                          rental.fieldLabel =
+                              fieldController.text.trim().isEmpty
+                                  ? 'Field not assigned'
+                                  : fieldController.text.trim();
+                          rental.operatorName =
+                              operatorController.text.trim().isEmpty
+                                  ? 'Operator not assigned'
+                                  : operatorController.text.trim();
                           rental.tankEntryDate = tankEntryDate;
                           rental.activationDate = activationDate;
                           rental.isActivated = activationDate != null;
@@ -6040,12 +12654,15 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
     final formKey = GlobalKey<FormState>();
     final oldLog = editIndex == null ? null : rental.fuelLogs[editIndex];
     final litreController = TextEditingController(
-      text: oldLog == null || oldLog.litres == 0 ? '' : oldLog.litres.toString(),
+      text:
+          oldLog == null || oldLog.litres == 0 ? '' : oldLog.litres.toString(),
     );
     final amountController = TextEditingController(
-      text: oldLog == null || oldLog.amount == 0 ? '' : oldLog.amount.toString(),
+      text:
+          oldLog == null || oldLog.amount == 0 ? '' : oldLog.amount.toString(),
     );
-    final readingController = TextEditingController(text: oldLog?.meterReading ?? '');
+    final readingController =
+        TextEditingController(text: oldLog?.meterReading ?? '');
     final notesController = TextEditingController(text: oldLog?.notes ?? '');
     DateTime selectedDate = oldLog?.date ?? DateTime.now();
     String selectedType = oldLog?.type ?? 'Activation fuel';
@@ -6081,8 +12698,11 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _sheetHeader(
-                      title: editIndex == null ? 'Add Fuel Record' : 'Edit Fuel Record',
-                      subtitle: 'Track fuel at activation, running refill, shift end, or closing',
+                      title: editIndex == null
+                          ? 'Add Fuel Record'
+                          : 'Edit Fuel Record',
+                      subtitle:
+                          'Track fuel at activation, running refill, shift end, or closing',
                       icon: Icons.local_gas_station_outlined,
                       color: AppTheme.warning,
                     ),
@@ -6125,15 +12745,18 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                         Expanded(
                           child: TextFormField(
                             controller: litreController,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
                             decoration: _inputDecoration(
                               label: 'Fuel used / checked',
                               icon: Icons.opacity_outlined,
                               suffixText: 'L',
                             ),
                             validator: (value) {
-                              if (value == null || value.trim().isEmpty) return null;
-                              if (double.tryParse(value) == null) return 'Invalid';
+                              if (value == null || value.trim().isEmpty)
+                                return null;
+                              if (double.tryParse(value) == null)
+                                return 'Invalid';
                               return null;
                             },
                           ),
@@ -6142,15 +12765,18 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                         Expanded(
                           child: TextFormField(
                             controller: amountController,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
                             decoration: _inputDecoration(
                               label: 'Fuel amount',
                               icon: Icons.currency_rupee,
                               suffixText: '₹',
                             ),
                             validator: (value) {
-                              if (value == null || value.trim().isEmpty) return 'Enter amount';
-                              if (double.tryParse(value) == null) return 'Invalid';
+                              if (value == null || value.trim().isEmpty)
+                                return 'Enter amount';
+                              if (double.tryParse(value) == null)
+                                return 'Invalid';
                               return null;
                             },
                           ),
@@ -6179,13 +12805,17 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                     ),
                     const SizedBox(height: 18),
                     _submitButton(
-                      editIndex == null ? 'Add Fuel Record' : 'Save Fuel Record',
+                      editIndex == null
+                          ? 'Add Fuel Record'
+                          : 'Save Fuel Record',
                       AppTheme.warning,
                       Icons.save_outlined,
                       () {
-                        if (!(formKey.currentState?.validate() ?? false)) return;
+                        if (!(formKey.currentState?.validate() ?? false))
+                          return;
                         final log = MachineFuelLog(
-                          id: oldLog?.id ?? 'FUL-USER-${DateTime.now().millisecondsSinceEpoch}',
+                          id: oldLog?.id ??
+                              'FUL-USER-${DateTime.now().millisecondsSinceEpoch}',
                           date: selectedDate,
                           type: selectedType,
                           litres: double.tryParse(litreController.text) ?? 0,
@@ -6275,7 +12905,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                   borderRadius: BorderRadius.circular(18),
                 ),
                 alignment: Alignment.center,
-                child: Icon(rental.machineStatus.icon, color: Colors.white, size: 28),
+                child: Icon(rental.machineStatus.icon,
+                    color: Colors.white, size: 28),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -6293,7 +12924,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                     const SizedBox(height: 4),
                     Text(
                       '${rental.id} • ${rental.tankId}',
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12),
                     ),
                   ],
                 ),
@@ -6313,11 +12945,14 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
           const SizedBox(height: 14),
           Row(
             children: [
-              _topMetric('Rate', _formatMoney(rental.rate), Icons.currency_rupee),
+              _topMetric(
+                  'Rate', _formatMoney(rental.rate), Icons.currency_rupee),
               const SizedBox(width: 8),
-              _topMetric('Fuel', _formatMoney(rental.totalFuelCost), Icons.local_gas_station_outlined),
+              _topMetric('Fuel', _formatMoney(rental.totalFuelCost),
+                  Icons.local_gas_station_outlined),
               const SizedBox(width: 8),
-              _topMetric('Balance', _formatMoney(balance), Icons.account_balance_wallet_outlined),
+              _topMetric('Balance', _formatMoney(balance),
+                  Icons.account_balance_wallet_outlined),
             ],
           ),
         ],
@@ -6338,7 +12973,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
         style: OutlinedButton.styleFrom(
           foregroundColor: AppTheme.primary,
           side: BorderSide(color: AppTheme.primary),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
       ),
       child: Column(
@@ -6364,16 +13000,24 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
               Expanded(
                 child: _miniMetric(
                   'Entered Tank',
-                  rental.tankEntryDate == null ? 'Pending' : _formatDate(rental.tankEntryDate!),
-                  color: rental.tankEntryDate == null ? AppTheme.warning : AppTheme.textPrimary,
+                  rental.tankEntryDate == null
+                      ? 'Pending'
+                      : _formatDate(rental.tankEntryDate!),
+                  color: rental.tankEntryDate == null
+                      ? AppTheme.warning
+                      : AppTheme.textPrimary,
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: _miniMetric(
                   'Activated',
-                  rental.activationDate == null ? 'Not activated' : _formatDate(rental.activationDate!),
-                  color: rental.activationDate == null ? AppTheme.warning : AppTheme.success,
+                  rental.activationDate == null
+                      ? 'Not activated'
+                      : _formatDate(rental.activationDate!),
+                  color: rental.activationDate == null
+                      ? AppTheme.warning
+                      : AppTheme.success,
                 ),
               ),
             ],
@@ -6384,8 +13028,12 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
               Expanded(
                 child: _miniMetric(
                   'Closed',
-                  rental.closingDate == null ? 'Running / open' : _formatDate(rental.closingDate!),
-                  color: rental.closingDate == null ? AppTheme.info : AppTheme.danger,
+                  rental.closingDate == null
+                      ? 'Running / open'
+                      : _formatDate(rental.closingDate!),
+                  color: rental.closingDate == null
+                      ? AppTheme.info
+                      : AppTheme.danger,
                 ),
               ),
               const SizedBox(width: 8),
@@ -6421,7 +13069,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.success,
                     disabledBackgroundColor: AppTheme.border,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
@@ -6434,8 +13083,12 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                   label: const Text('Continue'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppTheme.success,
-                    side: BorderSide(color: rental.isActivated ? AppTheme.success : AppTheme.border),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    side: BorderSide(
+                        color: rental.isActivated
+                            ? AppTheme.success
+                            : AppTheme.border),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
@@ -6453,7 +13106,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppTheme.warning,
                     side: BorderSide(color: AppTheme.warning),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
@@ -6467,7 +13121,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppTheme.danger,
                     side: BorderSide(color: AppTheme.danger),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
@@ -6484,7 +13139,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
 
     return _sectionCard(
       title: 'Machine Fuel Ledger',
-      subtitle: 'Activation fuel, running refill, shift-end check, and closing fuel check',
+      subtitle:
+          'Activation fuel, running refill, shift-end check, and closing fuel check',
       icon: Icons.local_gas_station_outlined,
       color: AppTheme.warning,
       action: OutlinedButton.icon(
@@ -6494,14 +13150,16 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
         style: OutlinedButton.styleFrom(
           foregroundColor: AppTheme.warning,
           side: BorderSide(color: AppTheme.warning),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
       ),
       child: logs.isEmpty
           ? _emptyState(
               icon: Icons.local_gas_station_outlined,
               title: 'No fuel records yet',
-              subtitle: 'Add activation fuel or shift-end fuel check for this machine.',
+              subtitle:
+                  'Add activation fuel or shift-end fuel check for this machine.',
             )
           : Column(
               children: [
@@ -6526,7 +13184,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                 ),
                 const SizedBox(height: 12),
                 ...logs.map((log) {
-                  final realIndex = rental.fuelLogs.indexWhere((item) => item.id == log.id);
+                  final realIndex =
+                      rental.fuelLogs.indexWhere((item) => item.id == log.id);
                   return _fuelLogTile(log, realIndex);
                 }),
               ],
@@ -6555,7 +13214,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                   color: AppTheme.warning.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.local_gas_station_outlined, color: AppTheme.warning, size: 18),
+                child: const Icon(Icons.local_gas_station_outlined,
+                    color: AppTheme.warning, size: 18),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -6568,7 +13228,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                     ),
                     Text(
                       _formatDate(log.date),
-                      style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textMuted),
                     ),
                   ],
                 ),
@@ -6591,18 +13252,24 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
           const SizedBox(height: 8),
           Row(
             children: [
-              Expanded(child: _miniMetric('Litres', log.litres.toStringAsFixed(1))),
+              Expanded(
+                  child: _miniMetric('Litres', log.litres.toStringAsFixed(1))),
               const SizedBox(width: 8),
-              Expanded(child: _miniMetric('Amount', _formatMoney(log.amount), color: AppTheme.warning)),
+              Expanded(
+                  child: _miniMetric('Amount', _formatMoney(log.amount),
+                      color: AppTheme.warning)),
               const SizedBox(width: 8),
-              Expanded(child: _miniMetric('Reading', log.meterReading.isEmpty ? '—' : log.meterReading)),
+              Expanded(
+                  child: _miniMetric('Reading',
+                      log.meterReading.isEmpty ? '—' : log.meterReading)),
             ],
           ),
           if (log.notes.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
               log.notes,
-              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              style:
+                  const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
             ),
           ],
         ],
@@ -6611,7 +13278,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
   }
 
   Widget _checkInCard() {
-    final checks = [...rental.dailyCheckIns]..sort((a, b) => b.date.compareTo(a.date));
+    final checks = [...rental.dailyCheckIns]
+      ..sort((a, b) => b.date.compareTo(a.date));
 
     return _sectionCard(
       title: 'Check-in & Continue History',
@@ -6624,15 +13292,18 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
         label: const Text('Continue'),
         style: OutlinedButton.styleFrom(
           foregroundColor: AppTheme.info,
-          side: BorderSide(color: rental.isActivated ? AppTheme.info : AppTheme.border),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          side: BorderSide(
+              color: rental.isActivated ? AppTheme.info : AppTheme.border),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
       ),
       child: checks.isEmpty
           ? _emptyState(
               icon: Icons.fact_check_outlined,
               title: 'No check-ins recorded',
-              subtitle: 'Activate or continue the machine to create check-in history.',
+              subtitle:
+                  'Activate or continue the machine to create check-in history.',
             )
           : Column(
               children: checks
@@ -6648,8 +13319,12 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                       child: Row(
                         children: [
                           Icon(
-                            check.submitted ? Icons.check_circle_outline : Icons.pending_actions_outlined,
-                            color: check.submitted ? AppTheme.success : AppTheme.warning,
+                            check.submitted
+                                ? Icons.check_circle_outline
+                                : Icons.pending_actions_outlined,
+                            color: check.submitted
+                                ? AppTheme.success
+                                : AppTheme.warning,
                           ),
                           const SizedBox(width: 10),
                           Expanded(
@@ -6658,12 +13333,15 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                               children: [
                                 Text(
                                   _formatDate(check.date),
-                                  style: const TextStyle(fontWeight: FontWeight.w800),
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800),
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
                                   check.note,
-                                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppTheme.textSecondary),
                                 ),
                               ],
                             ),
@@ -6724,7 +13402,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                      style: const TextStyle(
+                          fontSize: 12, color: AppTheme.textSecondary),
                     ),
                   ],
                 ),
@@ -6751,7 +13430,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+          Text(label,
+              style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
           const SizedBox(height: 4),
           Text(
             value,
@@ -6784,9 +13464,11 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
               value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w900),
             ),
-            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+            Text(label,
+                style: const TextStyle(color: Colors.white70, fontSize: 10)),
           ],
         ),
       ),
@@ -6808,7 +13490,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
           const SizedBox(width: 6),
           Text(
             text,
-            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+            style: const TextStyle(
+                color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
           ),
         ],
       ),
@@ -6849,7 +13532,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
               const SizedBox(height: 2),
               Text(
                 subtitle,
-                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary),
               ),
             ],
           ),
@@ -6884,16 +13568,24 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textMuted)),
                   const SizedBox(height: 2),
                   Text(
                     value,
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color),
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        color: color),
                   ),
                 ],
               ),
             ),
-            if (trailing != null) trailing else const Icon(Icons.edit_calendar_outlined, size: 18),
+            if (trailing != null)
+              trailing
+            else
+              const Icon(Icons.edit_calendar_outlined, size: 18),
           ],
         ),
       ),
@@ -6915,7 +13607,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
         style: ElevatedButton.styleFrom(
           backgroundColor: color,
           padding: const EdgeInsets.symmetric(vertical: 15),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           elevation: 0,
         ),
       ),
@@ -6956,6 +13649,8 @@ class _MachineRentalDetailPageState extends State<MachineRentalDetailPage> {
       ),
     );
   }
+
+
 }
 
 class _MapGridPainter extends CustomPainter {
@@ -6980,4 +13675,39 @@ class _MapGridPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// =========================
+// HodApprovalBadge (external widget used)
+// =========================
+
+class HodApprovalBadge extends StatelessWidget {
+  const HodApprovalBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppTheme.successBg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.success.withOpacity(0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Icon(Icons.verified_outlined, size: 14, color: AppTheme.success),
+          SizedBox(width: 4),
+          Text(
+            'HOD Approval',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.success,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

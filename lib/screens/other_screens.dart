@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
+import '../widgets/collapsible_tab_scaffold.dart';
 
 // ─── Model ────────────────────────────────────────────────────────────────────
 class PetrolEntry {
@@ -71,32 +71,28 @@ class _OthersScreenState extends State<OthersScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.surface,
-      appBar: AppBar(
-        title: const Text('Others'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        bottom: TabBar(
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) => [
+          buildCollapsibleAppBar(
+            title: 'Others',
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.pop(context),
+            ),
+            controller: _tabController,
+            tabs: const [
+              Tab(text: 'Bike Petrol'),
+              Tab(text: 'Snacks/Extras'),
+            ],
+          ),
+        ],
+        body: TabBarView(
           controller: _tabController,
-          labelColor: AppTheme.primary,
-          unselectedLabelColor: AppTheme.textSecondary,
-          indicatorColor: AppTheme.primary,
-          indicatorWeight: 2.5,
-          labelStyle:
-              const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-          tabs: const [
-            Tab(text: 'Bike Petrol', icon: Icon(Icons.motorcycle)),
-            Tab(text: 'Snacks/Extras', icon: Icon(Icons.fastfood)),
+          children: const [
+            BikePetrolTab(),
+            SnacksExtrasTab(),
           ],
         ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: const [
-          BikePetrolTab(),
-          SnacksExtrasTab(),
-        ],
       ),
     );
   }
@@ -187,8 +183,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
             PetrolEntry(
               id: 'PTL-${DateTime.now().millisecondsSinceEpoch % 9000 + 1000}',
               bikeId: _selectedBike!,
-              date:
-                  'Today ${DateTime.now().hour}:${DateTime.now().minute}',
+              date: 'Today ${DateTime.now().hour}:${DateTime.now().minute}',
               quantity: double.parse(_quantityController.text),
               amount: double.parse(_amountController.text),
               paymentMode: _paymentMode,
@@ -214,8 +209,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(16),
         duration: const Duration(seconds: 2),
       ),
@@ -286,8 +280,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(18),
-            border:
-                Border.all(color: AppTheme.info.withValues(alpha: 0.2)),
+            border: Border.all(color: AppTheme.info.withValues(alpha: 0.2)),
           ),
           alignment: Alignment.center,
           child: const Text('🏍️', style: TextStyle(fontSize: 28)),
@@ -325,16 +318,12 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [
-            AppTheme.info.withValues(alpha: 0.1),
-            AppTheme.infoBg
-          ],
+          colors: [AppTheme.info.withValues(alpha: 0.1), AppTheme.infoBg],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        border:
-            Border.all(color: AppTheme.info.withValues(alpha: 0.2)),
+        border: Border.all(color: AppTheme.info.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -365,8 +354,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
                 SizedBox(height: 4),
                 Text(
                   'Record petrol quantity, amount, and payment mode for each bike.',
-                  style: TextStyle(
-                      fontSize: 11, color: AppTheme.textSecondary),
+                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
                 ),
               ],
             ),
@@ -445,8 +433,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
         decoration: const InputDecoration(
           prefixIcon: Icon(Icons.motorcycle, size: 20),
           border: InputBorder.none,
-          contentPadding:
-              EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         ),
         items: _bikes.map((bike) {
           return DropdownMenuItem(
@@ -470,8 +457,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
             hintText: 'Enter petrol quantity',
             prefixIcon: const Icon(Icons.water_drop, size: 20),
             suffixText: 'L',
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
         const SizedBox(height: 12),
@@ -483,8 +469,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
             hintText: 'Enter total amount',
             prefixIcon: const Icon(Icons.currency_rupee, size: 20),
             suffixText: '₹',
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
       ],
@@ -527,9 +512,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
                 children: [
                   Icon(
                     icon,
-                    color: isSelected
-                        ? AppTheme.primary
-                        : AppTheme.textMuted,
+                    color: isSelected ? AppTheme.primary : AppTheme.textMuted,
                     size: 24,
                   ),
                   const SizedBox(height: 6),
@@ -615,8 +598,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
           ),
         ),
         const SizedBox(height: 12),
-        ..._petrolEntries
-            .map((entry) => _buildPetrolEntryCard(entry)),
+        ..._petrolEntries.map((entry) => _buildPetrolEntryCard(entry)),
       ],
     );
   }
@@ -640,8 +622,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
               borderRadius: BorderRadius.circular(12),
             ),
             alignment: Alignment.center,
-            child: const Icon(Icons.motorcycle,
-                color: AppTheme.info, size: 22),
+            child: const Icon(Icons.motorcycle, color: AppTheme.info, size: 22),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -662,15 +643,13 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
                     Text(
                       '${entry.quantity}L',
                       style: const TextStyle(
-                          fontSize: 11,
-                          color: AppTheme.textSecondary),
+                          fontSize: 11, color: AppTheme.textSecondary),
                     ),
                     const SizedBox(width: 8),
                     Text(
                       '₹${entry.amount.toStringAsFixed(0)}',
                       style: const TextStyle(
-                          fontSize: 11,
-                          color: AppTheme.textSecondary),
+                          fontSize: 11, color: AppTheme.textSecondary),
                     ),
                     const SizedBox(width: 8),
                     Container(
@@ -702,8 +681,7 @@ class _BikePetrolTabState extends State<BikePetrolTab> {
             children: [
               Text(
                 entry.date,
-                style: const TextStyle(
-                    fontSize: 10, color: AppTheme.textMuted),
+                style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
               ),
               if (entry.notes.isNotEmpty) ...[
                 const SizedBox(height: 4),
@@ -735,10 +713,8 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
   String _paymentMode = 'Cash';
   bool _isSubmitting = false;
 
-  final TextEditingController _broughtByController =
-      TextEditingController();
-  final TextEditingController _forWhomController =
-      TextEditingController();
+  final TextEditingController _broughtByController = TextEditingController();
+  final TextEditingController _forWhomController = TextEditingController();
   final TextEditingController _itemsController = TextEditingController();
   final TextEditingController _costController = TextEditingController();
 
@@ -803,8 +779,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
               items: _itemsController.text,
               cost: double.parse(_costController.text),
               paymentMode: _paymentMode,
-              date:
-                  'Today ${DateTime.now().hour}:${DateTime.now().minute}',
+              date: 'Today ${DateTime.now().hour}:${DateTime.now().minute}',
             ));
       });
       _showSnackbar('Snack entry added successfully!', AppTheme.success);
@@ -826,8 +801,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(16),
         duration: const Duration(seconds: 2),
       ),
@@ -891,8 +865,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-                color: AppTheme.warning.withValues(alpha: 0.2)),
+            border: Border.all(color: AppTheme.warning.withValues(alpha: 0.2)),
           ),
           alignment: Alignment.center,
           child: const Text('🍕', style: TextStyle(fontSize: 28)),
@@ -930,16 +903,12 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [
-            AppTheme.warning.withValues(alpha: 0.1),
-            AppTheme.warningBg
-          ],
+          colors: [AppTheme.warning.withValues(alpha: 0.1), AppTheme.warningBg],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: AppTheme.warning.withValues(alpha: 0.2)),
+        border: Border.all(color: AppTheme.warning.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -951,8 +920,8 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
               borderRadius: BorderRadius.circular(12),
             ),
             alignment: Alignment.center,
-            child: const Icon(Icons.fastfood,
-                color: AppTheme.warning, size: 22),
+            child:
+                const Icon(Icons.fastfood, color: AppTheme.warning, size: 22),
           ),
           const SizedBox(width: 14),
           const Expanded(
@@ -970,8 +939,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
                 SizedBox(height: 4),
                 Text(
                   'Record who brought items, for whom, what items, and payment details.',
-                  style: TextStyle(
-                      fontSize: 11, color: AppTheme.textSecondary),
+                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
                 ),
               ],
             ),
@@ -1046,8 +1014,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
             labelText: 'Brought By',
             hintText: 'Name of person who brought',
             prefixIcon: const Icon(Icons.person, size: 20),
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
         const SizedBox(height: 12),
@@ -1057,8 +1024,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
             labelText: 'For Whom',
             hintText: 'Team, department, or person names',
             prefixIcon: const Icon(Icons.people, size: 20),
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
       ],
@@ -1075,8 +1041,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
             labelText: 'Items/Snacks',
             hintText: 'List all items (e.g., Samosa, Tea, Biscuits)',
             prefixIcon: const Icon(Icons.fastfood, size: 20),
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
         const SizedBox(height: 12),
@@ -1088,8 +1053,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
             hintText: 'Enter total cost',
             prefixIcon: const Icon(Icons.currency_rupee, size: 20),
             suffixText: '₹',
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
       ],
@@ -1132,9 +1096,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
                 children: [
                   Icon(
                     icon,
-                    color: isSelected
-                        ? AppTheme.success
-                        : AppTheme.textMuted,
+                    color: isSelected ? AppTheme.success : AppTheme.textMuted,
                     size: 24,
                   ),
                   const SizedBox(height: 6),
@@ -1207,8 +1169,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
           ),
         ),
         const SizedBox(height: 12),
-        ..._snackEntries
-            .map((entry) => _buildSnackEntryCard(entry)),
+        ..._snackEntries.map((entry) => _buildSnackEntryCard(entry)),
       ],
     );
   }
@@ -1276,8 +1237,8 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: entry.paymentMode == 'UPI'
                           ? AppTheme.successBg
@@ -1304,8 +1265,7 @@ class _SnacksExtrasTabState extends State<SnacksExtrasTab> {
             children: [
               Text(
                 entry.date,
-                style: const TextStyle(
-                    fontSize: 10, color: AppTheme.textMuted),
+                style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
               ),
             ],
           ),

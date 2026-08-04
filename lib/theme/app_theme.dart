@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
-  // Primary Colors
-  static const Color primary = Color(0xFF1A1A2E);
-  static const Color primaryLight = Color(0xFF2D2D44);
-  static const Color accent = Color(0xFF16213E);
+  // Primary Colors — professional blue (replaces the old dark navy)
+  static const Color primary = Color(0xFF2563EB); // Blue 600
+  static const Color primaryLight = Color(0xFF3B82F6); // Blue 500
+  static const Color secondary = Color(0xFF1D4ED8); // Blue 700
+  static const Color accent = Color(0xFF1D4ED8); // Blue 700
   static const Color highlight = Color(0xFFE94560);
 
   // Surface Colors
@@ -13,10 +14,10 @@ class AppTheme {
   static const Color surfaceDark = Color(0xFFE8ECF2);
 
   // Text Colors
-  static const Color textPrimary = Color(0xFF1A1A2E);
-  static const Color textSecondary = Color(0xFF6B7280);
-  static const Color textMuted = Color(0xFF9CA3AF);
-  static const Color textHint = Color(0xFFB0B8C5);
+  static const Color textPrimary = Color(0xFF0F172A); // Slate 900
+  static const Color textSecondary = Color(0xFF334155); // Slate 700
+  static const Color textMuted = Color(0xFF475569); // Slate 600
+  static const Color textHint = Color(0xFF64748B); // Slate 500
 
   // Border Colors
   static const Color border = Color(0xFFE5E7EB);
@@ -156,6 +157,16 @@ class AppTheme {
         borderRadius: BorderRadius.circular(20),
         side: const BorderSide(color: border),
       ),
+    ),
+    tabBarTheme: const TabBarThemeData(
+      indicator: UnderlineTabIndicator(
+        borderSide: BorderSide(color: AppTheme.primary, width: 3),
+        insets: EdgeInsets.symmetric(horizontal: 16),
+      ),
+      labelColor: AppTheme.primary,
+      unselectedLabelColor: AppTheme.textMuted,
+      indicatorSize: TabBarIndicatorSize.label,
+      labelStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
     ),
   );
 }

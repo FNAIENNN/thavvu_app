@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/auth_service.dart';
+import 'hod_approval_screen.dart';
 import 'login_screen.dart';
 import 'main_shell.dart';
 
@@ -75,15 +76,28 @@ class _SplashScreenState extends State<SplashScreen>
     _progressController.forward();
 
     // ── FIX #3: Check persistent session while animation plays ──
-    final loggedIn = await AuthService.isLoggedIn();
+    // A real Supabase session is REQUIRED: every data operation goes
+    // through RLS. Prefs alone (legacy local auth) no longer counts.
+    final hasSession = await AuthService.hasSupabaseSession();
+    final loggedIn = hasSession && await AuthService.isLoggedIn();
+    final userData =
+        loggedIn ? await AuthService.getUserData() : const <String, String>{};
+    final isHod = (userData['role'] ?? '').toLowerCase() == 'hod';
 
     await Future.delayed(const Duration(milliseconds: 1800));
     if (!mounted) return;
 
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) =>
-            loggedIn ? const MainShell() : const LoginScreen(),
+        pageBuilder: (_, __, ___) => loggedIn
+            ? (isHod
+                ? HodApprovalScreen(
+                    email: userData['email'] ?? '',
+                    isDemo: (userData['email'] ?? '').toLowerCase() ==
+                        'hod@thavvu.com',
+                  )
+                : const MainShell())
+            : const LoginScreen(),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
         transitionDuration: const Duration(milliseconds: 500),
@@ -113,9 +127,11 @@ class _SplashScreenState extends State<SplashScreen>
         child: Stack(
           children: [
             Positioned(
-              top: -80, right: -80,
+              top: -80,
+              right: -80,
               child: Container(
-                width: 280, height: 280,
+                width: 280,
+                height: 280,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFF1565C0).withOpacity(0.12),
@@ -123,9 +139,11 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ),
             Positioned(
-              bottom: -60, left: -60,
+              bottom: -60,
+              left: -60,
               child: Container(
-                width: 220, height: 220,
+                width: 220,
+                height: 220,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFF0FA37A).withOpacity(0.1),
@@ -143,7 +161,8 @@ class _SplashScreenState extends State<SplashScreen>
                       child: Opacity(
                         opacity: _logoOpacity.value,
                         child: Container(
-                          width: 130, height: 130,
+                          width: 130,
+                          height: 130,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(35),
                             boxShadow: [
@@ -162,14 +181,18 @@ class _SplashScreenState extends State<SplashScreen>
                               errorBuilder: (_, __, ___) => Container(
                                 decoration: BoxDecoration(
                                   gradient: const LinearGradient(
-                                    colors: [Color(0xFF1976D2), Color(0xFF0FA37A)],
+                                    colors: [
+                                      Color(0xFF1976D2),
+                                      Color(0xFF0FA37A)
+                                    ],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                   ),
                                   borderRadius: BorderRadius.circular(35),
                                 ),
                                 child: const Center(
-                                  child: Text('👷', style: TextStyle(fontSize: 52)),
+                                  child: Text('👷',
+                                      style: TextStyle(fontSize: 52)),
                                 ),
                               ),
                             ),
@@ -193,15 +216,19 @@ class _SplashScreenState extends State<SplashScreen>
                                   TextSpan(
                                     text: 'Thavvu ',
                                     style: TextStyle(
-                                      fontSize: 34, fontWeight: FontWeight.w800,
-                                      color: Colors.white, letterSpacing: -0.5,
+                                      fontSize: 34,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                      letterSpacing: -0.5,
                                     ),
                                   ),
                                   TextSpan(
                                     text: 'Supervisor',
                                     style: TextStyle(
-                                      fontSize: 34, fontWeight: FontWeight.w300,
-                                      color: Color(0xFF4FC3F7), letterSpacing: -0.5,
+                                      fontSize: 34,
+                                      fontWeight: FontWeight.w300,
+                                      color: Color(0xFF4FC3F7),
+                                      letterSpacing: -0.5,
                                     ),
                                   ),
                                 ],
@@ -220,7 +247,8 @@ class _SplashScreenState extends State<SplashScreen>
                               child: const Text(
                                 'Site Management · Simplified',
                                 style: TextStyle(
-                                  fontSize: 12, color: Colors.white60,
+                                  fontSize: 12,
+                                  color: Colors.white60,
                                   letterSpacing: 1.0,
                                 ),
                               ),
@@ -255,7 +283,8 @@ class _SplashScreenState extends State<SplashScreen>
                                     ? 'Loading modules...'
                                     : 'Almost ready...',
                             style: const TextStyle(
-                              fontSize: 11, color: Colors.white38,
+                              fontSize: 11,
+                              color: Colors.white38,
                               letterSpacing: 0.5,
                             ),
                           ),
@@ -267,7 +296,9 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ),
             Positioned(
-              bottom: 36, left: 0, right: 0,
+              bottom: 36,
+              left: 0,
+              right: 0,
               child: Center(
                 child: Text(
                   'v1.0.0 · Build 2025',

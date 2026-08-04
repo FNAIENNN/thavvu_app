@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import '../widgets/collapsible_tab_scaffold.dart';
 
 class HODTasksScreen extends StatefulWidget {
   const HODTasksScreen({super.key});
@@ -167,40 +168,38 @@ class _HODTasksScreenState extends State<HODTasksScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.surface,
-      appBar: AppBar(
-        title: const Text('HOD Tasks'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () => _showSearchDialog(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => setState(() {}),
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) => [
+          buildCollapsibleAppBar(
+            title: 'HOD Tasks',
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.pop(context),
+            ),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.search),
+                onPressed: () => _showSearchDialog(),
+              ),
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: () => setState(() {}),
+              ),
+            ],
+            controller: _tabController,
+            tabs: const [
+              Tab(text: 'My Tasks'),
+              Tab(text: 'Performance'),
+            ],
           ),
         ],
-        bottom: TabBar(
+        body: TabBarView(
           controller: _tabController,
-          labelColor: AppTheme.primary,
-          unselectedLabelColor: AppTheme.textSecondary,
-          indicatorColor: AppTheme.primary,
-          indicatorWeight: 2.5,
-          tabs: const [
-            Tab(text: 'My Tasks', icon: Icon(Icons.assignment)),
-            Tab(text: 'Performance', icon: Icon(Icons.analytics)),
+          children: [
+            _buildTasksTab(),
+            _buildPerformanceTab(),
           ],
         ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildTasksTab(),
-          _buildPerformanceTab(),
-        ],
       ),
     );
   }
@@ -335,8 +334,9 @@ class _HODTasksScreenState extends State<HODTasksScreen>
         color: AppTheme.surfaceCard,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color:
-              isCompleted ? AppTheme.success.withValues(alpha: 0.3) : AppTheme.border,
+          color: isCompleted
+              ? AppTheme.success.withValues(alpha: 0.3)
+              : AppTheme.border,
         ),
         boxShadow: AppTheme.cardShadow,
       ),
@@ -796,7 +796,9 @@ class _HODTasksScreenState extends State<HODTasksScreen>
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: isUser ? AppTheme.primary.withValues(alpha: 0.05) : Colors.transparent,
+        color: isUser
+            ? AppTheme.primary.withValues(alpha: 0.05)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         border: isUser
             ? Border.all(color: AppTheme.primary.withValues(alpha: 0.3))

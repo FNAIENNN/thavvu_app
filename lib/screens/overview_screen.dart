@@ -75,7 +75,7 @@ class _OverviewScreenState extends State<OverviewScreen>
                 const SizedBox(height: 16),
                 _buildStatsSection(),
                 const SizedBox(height: 16),
-                _buildQuickActions(),
+                _buildHodAlertsSection(),
                 const SizedBox(height: 16),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16),
@@ -132,7 +132,8 @@ class _OverviewScreenState extends State<OverviewScreen>
                             borderRadius: BorderRadius.circular(15),
                             boxShadow: [
                               BoxShadow(
-                                color: const Color(0xFF1976D2).withValues(alpha: 0.3),
+                                color: const Color(0xFF1976D2)
+                                    .withValues(alpha: 0.3),
                                 blurRadius: 15,
                                 offset: const Offset(0, 5),
                               ),
@@ -198,7 +199,8 @@ class _OverviewScreenState extends State<OverviewScreen>
                         color: const Color(0xFF0FA37A).withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                          color: const Color(0xFF0FA37A).withValues(alpha: 0.45),
+                          color:
+                              const Color(0xFF0FA37A).withValues(alpha: 0.45),
                         ),
                       ),
                       child: const Row(
@@ -314,7 +316,10 @@ class _OverviewScreenState extends State<OverviewScreen>
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [color.withValues(alpha: 0.1), color.withValues(alpha: 0.03)],
+            colors: [
+              color.withValues(alpha: 0.1),
+              color.withValues(alpha: 0.03)
+            ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -350,77 +355,219 @@ class _OverviewScreenState extends State<OverviewScreen>
     );
   }
 
-  Widget _buildQuickActions() {
+  Widget _buildHodAlertsSection() {
+    final alerts = [
+      {
+        'title': 'Stock approval required',
+        'message':
+            'Diesel low-stock, GIN verification and material return alerts must be reviewed.',
+        'module': 'Stock Inventory',
+        'route': '/stock',
+        'icon': Icons.inventory_2_outlined,
+        'color': AppTheme.warning,
+        'priority': 'Mandatory',
+      },
+      {
+        'title': 'Attendance submission due',
+        'message':
+            'Check-in, check-out and outside-worker daily wage entries need HOD visibility.',
+        'module': 'Attendance',
+        'navIndex': 3,
+        'icon': Icons.fingerprint_rounded,
+        'color': AppTheme.success,
+        'priority': 'Required',
+      },
+    ];
+
+    const mandatoryModules = [
+      'Stock',
+      'Attendance',
+      'Machine Entry',
+      'Daily Data',
+      'Rental',
+      'Cash',
+      'Food',
+      'Tasks',
+      'Reports',
+      'Maps',
+    ];
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SectionHeader(title: 'Quick Actions'),
+          const SectionHeader(title: 'HOD Alerts'),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              _quickActionBtn('Attendance', Icons.fingerprint_rounded,
-                  AppTheme.success, () => widget.onNavigate(3)),
-              const SizedBox(width: 10),
-              _quickActionBtn('New Machine', Icons.add_business_rounded,
-                  AppTheme.warning, () => widget.onNavigate(1)),
-              const SizedBox(width: 10),
-              _quickActionBtn('Daily Log', Icons.edit_calendar_rounded,
-                  AppTheme.info, () => widget.onNavigate(2)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _quickActionBtn('HOD Tasks', Icons.assignment_turned_in_rounded,
-                  AppTheme.primary, () => widget.onNavigateModule('/hodtasks')),
-              const SizedBox(width: 10),
-              _quickActionBtn('Maps', Icons.map_outlined, AppTheme.warning,
-                  () => widget.onNavigateModule('/maps')),
-              const SizedBox(width: 10),
-              _quickActionBtn('Reports', Icons.bar_chart_rounded,
-                  AppTheme.danger, () => widget.onNavigateModule('/reports')),
-            ],
-          ),
+          ...alerts.map((alert) {
+            return _buildHodAlertTile(
+              title: alert['title'] as String,
+              message: alert['message'] as String,
+              module: alert['module'] as String,
+              priority: alert['priority'] as String,
+              icon: alert['icon'] as IconData,
+              color: alert['color'] as Color,
+              onTap: () {
+                if (alert.containsKey('navIndex')) {
+                  widget.onNavigate(alert['navIndex'] as int);
+                } else {
+                  widget.onNavigateModule(alert['route'] as String);
+                }
+              },
+            );
+          }),
+          const SizedBox(height: 12),
+          _buildMandatoryAlertModules(mandatoryModules),
         ],
       ),
     );
   }
 
-  Widget _quickActionBtn(
-      String label, IconData icon, Color color, VoidCallback onTap) {
-    return Expanded(
-      child: GestureDetector(
+  Widget _buildHodAlertTile({
+    required String title,
+    required String message,
+    required String module,
+    required String priority,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+        boxShadow: AppTheme.subtleShadow,
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
         onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withValues(alpha: 0.2)),
-            boxShadow: AppTheme.subtleShadow,
-          ),
-          child: Column(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(7),
+                width: 42,
+                height: 42,
                 decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(10)),
-                child: Icon(icon, size: 20, color: color),
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 22),
               ),
-              const SizedBox(height: 6),
-              Text(
-                label,
-                style: TextStyle(
-                    fontSize: 10, fontWeight: FontWeight.w700, color: color),
-                textAlign: TextAlign.center,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            priority,
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              color: color,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      message,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textSecondary,
+                        height: 1.3,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      module,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: color,
+                      ),
+                    ),
+                  ],
+                ),
               ),
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right,
+                  color: AppTheme.textMuted, size: 20),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildMandatoryAlertModules(List<String> modules) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.infoBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.info.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Mandatory Alert Modules',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              color: AppTheme.info,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: modules.map((module) {
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border:
+                      Border.all(color: AppTheme.info.withValues(alpha: 0.16)),
+                ),
+                child: Text(
+                  module,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
       ),
     );
   }
@@ -437,13 +584,13 @@ class _OverviewScreenState extends State<OverviewScreen>
         'popularity': 70
       },
       {
-        'emoji': '📋',
-        'title': 'HOD Tasks',
-        'subtitle': 'Assigned tasks by HOD',
+        'emoji': '✅',
+        'title': 'Tasks & Checklist',
+        'subtitle': 'HOD-assigned · Daily/Weekly',
         'navType': 'route',
-        'route': '/hodtasks',
+        'route': '/tasks',
         'color': AppTheme.success,
-        'popularity': 82
+        'popularity': 85
       },
       {
         'emoji': '🚜',
@@ -482,15 +629,6 @@ class _OverviewScreenState extends State<OverviewScreen>
         'popularity': 78
       },
       {
-        'emoji': '🔄',
-        'title': 'Internal Transfers',
-        'subtitle': 'Point-to-point stock',
-        'navType': 'route',
-        'route': '/transfers',
-        'color': AppTheme.info,
-        'popularity': 72
-      },
-      {
         'emoji': '🔑',
         'title': 'Rental',
         'subtitle': 'Equipment hire tracking',
@@ -516,15 +654,6 @@ class _OverviewScreenState extends State<OverviewScreen>
         'route': '/food',
         'color': AppTheme.warning,
         'popularity': 72
-      },
-      {
-        'emoji': '✅',
-        'title': 'Tasks & Checklist',
-        'subtitle': 'HOD-assigned · Daily/Weekly',
-        'navType': 'route',
-        'route': '/tasks',
-        'color': AppTheme.success,
-        'popularity': 85
       },
       {
         'emoji': '📊',
@@ -625,7 +754,7 @@ class _ModuleCardState extends State<_ModuleCard>
   Widget build(BuildContext context) {
     return GestureDetector(
       onTapDown: (_) => _pressController.forward(),
-      onTapUp: (_) {
+      onTap: () {
         _pressController.reverse();
         widget.onTap();
       },
@@ -639,7 +768,8 @@ class _ModuleCardState extends State<_ModuleCard>
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: widget.color.withValues(alpha: 0.15), width: 1),
+            border: Border.all(
+                color: widget.color.withValues(alpha: 0.15), width: 1),
             boxShadow: [
               BoxShadow(
                   color: widget.color.withValues(alpha: 0.08),

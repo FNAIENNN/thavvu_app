@@ -1,19 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/attendance_context_service.dart';
 import '../services/auth_service.dart';
+import '../services/hod_site_workspace_service.dart';
+import '../services/thavvu_point_context.dart';
 import 'overview_screen.dart';
-import 'machines_entry_screen_.dart';
+import '../features/hod_machine/presentation/screens/supervisor_machine_entry_screen.dart';
 import 'daily_data_screen.dart';
 import 'attendance_screen.dart';
 import 'stock_inventory_screen.dart';
-import 'internal_transfer_screen.dart';
 import 'rental_screen.dart';
 import 'cash_screen.dart';
 import 'food_screen.dart';
 import 'tasks_screen.dart';
 import 'reports_screen.dart';
 import 'maps_screen.dart';
-import 'hod_tasks_screen.dart';
 import 'other_screens.dart';
 import 'login_screen.dart';
 
@@ -32,6 +36,15 @@ class _MainShellState extends State<MainShell>
   late Animation<double> _drawerFade;
 
   int _notificationCount = 3;
+  bool _isNavigating = false;
+  Map<String, String> _userData = const {};
+
+  /// Ground-truth active Thavvu Points from Supabase assignments (joined
+  /// with thavvu_points) — the source for the selectable point chips.
+  Future<List<Map<String, dynamic>>> _activePointsFuture =
+      Future.value(const <Map<String, dynamic>>[]);
+  final AttendanceContextService _contextService = AttendanceContextService();
+  final HodSiteWorkspaceService _workspaceService = HodSiteWorkspaceService();
 
   // Thavvu IDs data - visible after login
   final Map<String, dynamic> _thavvuIds = {
@@ -67,6 +80,65 @@ class _MainShellState extends State<MainShell>
     );
     _drawerFade =
         CurvedAnimation(parent: _drawerAnimController, curve: Curves.easeOut);
+    unawaited(_loadSupervisorWorkspace());
+  }
+
+  Future<void> _loadSupervisorWorkspace() async {
+    final userData = await AuthService.getUserData();
+    final supervisorId = userData['empId'] ?? 'THV-SUP-001';
+    final points =
+        await _workspaceService.grantedPointsForSupervisor(supervisorId);
+    // Persisted point selection + ground-truth active points from Supabase.
+    await ThavvuPointContext.instance.load();
+    final activePoints =
+        await _contextService.fetchActivePointsForCurrentUser();
+    // Real identity from the profiles table (no placeholders).
+    final profile = await _contextService.fetchProfileForCurrentUser();
+    if (!mounted) return;
+    final siteName = activePoints.isNotEmpty
+        ? (_pointName(activePoints.first) ??
+            (points.isNotEmpty ? points.first.siteName : ''))
+        : (points.isNotEmpty ? points.first.siteName : '');
+    final siteId = activePoints.isNotEmpty
+        ? (activePoints.first['site_id']?.toString() ??
+            (points.isNotEmpty ? points.first.siteId : null))
+        : (points.isNotEmpty ? points.first.siteId : null);
+    final fullName =
+        profile?['full_name']?.toString() ?? userData['name'] ?? 'Supervisor';
+    final empId = profile?['emp_id']?.toString() ?? supervisorId;
+    setState(() {
+      _userData = userData;
+      _activePointsFuture = Future.value(activePoints);
+      _supervisorData['name'] = fullName;
+      _supervisorData['email'] = profile?['email']?.toString() ??
+          userData['email'] ??
+          '';
+      _supervisorData['phone'] = profile?['phone']?.toString() ?? '';
+      _supervisorData['role'] = profile?['role']?.toString() ??
+          userData['role'] ??
+          'Supervisor';
+      _supervisorData['empId'] = empId;
+      final joined = profile?['created_at']?.toString();
+      final joinedDate =
+          (joined == null || joined.isEmpty) ? '' : _formatJoinedDate(joined);
+      if (joinedDate.isNotEmpty) _supervisorData['joinDate'] = joinedDate;
+      _supervisorData['site'] = siteName;
+      _thavvuIds['supervisorId'] = empId;
+      if (siteId != null) _thavvuIds['siteId'] = siteId;
+    });
+  }
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  String _formatJoinedDate(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    final local = dt.toLocal();
+    return '${local.day.toString().padLeft(2, '0')} '
+        '${_months[local.month - 1]} ${local.year}';
   }
 
   @override
@@ -82,24 +154,37 @@ class _MainShellState extends State<MainShell>
 
   // ── Navigation helpers ───────────────────────────────────────────────────
 
-  void _pushScreen(Widget screen) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => screen),
-    );
+  Future<void> _pushScreen(Widget screen) async {
+    if (_isNavigating || !mounted) return;
+    setState(() => _isNavigating = true);
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => screen),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isNavigating = false);
+      } else {
+        _isNavigating = false;
+      }
+    }
   }
 
-  /// Called by OverviewScreen quick actions and module grid.
+  /// Called by OverviewScreen module grid and alert shortcuts.
   void _handleQuickNav(int index) {
     switch (index) {
       case 1:
-        _pushScreen(const MachinesEntryScreen(isHOD: false));
+        _recordModuleOpen('Machines');
+        unawaited(_pushScreen(const SupervisorMachineEntryScreen()));
         break;
       case 2:
-        _pushScreen(const DailyDataScreen());
+        _recordModuleOpen('Daily Data');
+        unawaited(_pushScreen(const DailyDataScreen()));
         break;
       case 3:
-        _pushScreen(const AttendanceScreen());
+        _recordModuleOpen('Attendance');
+        unawaited(_pushScreen(const AttendanceScreen()));
         break;
       default:
         break;
@@ -109,38 +194,51 @@ class _MainShellState extends State<MainShell>
   void _handleModuleRoute(String route) {
     switch (route) {
       case '/stock':
-        _pushScreen(const StockInventoryScreen());
-        break;
-      case '/transfers':
-        _pushScreen(const InternalTransferScreen());
+        _recordModuleOpen('Stock');
+        unawaited(_pushScreen(const StockInventoryScreen()));
         break;
       case '/rental':
-        _pushScreen(const RentalScreen());
+        _recordModuleOpen('Rental');
+        unawaited(_pushScreen(const RentalScreen()));
         break;
       case '/cash':
-        _pushScreen(const CashScreen());
+        _recordModuleOpen('Cash');
+        unawaited(_pushScreen(const CashModuleScreen()));
         break;
       case '/food':
-        _pushScreen(const FoodScreen());
+        _recordModuleOpen('Food');
+        unawaited(_pushScreen(const FoodScreen()));
         break;
       case '/tasks':
-        _pushScreen(const TasksScreen());
+        _recordModuleOpen('Tasks');
+        unawaited(_pushScreen(const TasksScreen()));
         break;
       case '/reports':
-        _pushScreen(const ReportsScreen());
+        _recordModuleOpen('Reports');
+        unawaited(_pushScreen(const ReportsScreen()));
         break;
       case '/maps':
-        _pushScreen(const MapsScreen());
-        break;
-      case '/hodtasks':
-        _pushScreen(const HODTasksScreen());
+        _recordModuleOpen('Maps');
+        unawaited(_pushScreen(const MapsScreen()));
         break;
       case '/others':
-        _pushScreen(const OthersScreen());
+        _recordModuleOpen('Other');
+        unawaited(_pushScreen(const OthersScreen()));
         break;
       default:
         break;
     }
+  }
+
+  void _recordModuleOpen(String module) {
+    unawaited(
+      _workspaceService.recordSupervisorActivityForCurrentSession(
+        module: module,
+        action: '$module opened',
+        details:
+            '${_userData['name'] ?? _supervisorData['name']} opened the $module module from supervisor login.',
+      ),
+    );
   }
 
   @override
@@ -150,14 +248,199 @@ class _MainShellState extends State<MainShell>
       backgroundColor: const Color(0xFFF4F6FC),
       drawer: _buildSideDrawer(),
       appBar: _buildAppBar(),
-      body: OverviewScreen(
-        onNavigate: _handleQuickNav,
-        onNavigateModule: _handleModuleRoute,
+      body: Column(
+        children: [
+          _buildGrantedPointsBanner(),
+          Expanded(
+            child: OverviewScreen(
+              onNavigate: _handleQuickNav,
+              onNavigateModule: _handleModuleRoute,
+            ),
+          ),
+        ],
       ),
     );
   }
 
   // ── APP BAR ──────────────────────────────────────────────────────────────
+  Widget _buildGrantedPointsBanner() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _activePointsFuture,
+      builder: (context, snapshot) {
+        final points = snapshot.data ?? const <Map<String, dynamic>>[];
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const SizedBox(height: 4);
+        }
+        if (points.isEmpty) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: const Color(0xFFFFF8E1),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline, color: Color(0xFFE6A817), size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'No Thavvu Point granted yet. Contact HOD for assignment.',
+                    style: TextStyle(
+                      color: Color(0xFF7A5C00),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        // Tap a point chip to make it the active point for all modules.
+        return ListenableBuilder(
+          listenable: ThavvuPointContext.instance,
+          builder: (context, _) {
+            final selected =
+                ThavvuPointContext.instance.selectedPointId;
+            return Container(
+              width: double.infinity,
+              color: Colors.white,
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: SizedBox(
+                height: 76,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: points.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 10),
+                  itemBuilder: (context, index) {
+                    final row = points[index];
+                    final pointId =
+                        row['thavvu_point_id']?.toString() ?? '';
+                    final pointName = _pointName(row) ?? pointId;
+                    final siteId = row['site_id']?.toString() ?? '';
+                    final isSelected = selected == pointId;
+                    return GestureDetector(
+                      onTap: () => _selectPoint(row),
+                      child: Container(
+                        width: 248,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF4F8FF),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: isSelected
+                                ? AppTheme.primary
+                                : const Color(0xFFDDEBFF),
+                            width: isSelected ? 2 : 1,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: (isSelected
+                                        ? AppTheme.primary
+                                        : const Color(0xFF1565C0))
+                                    .withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                isSelected
+                                    ? Icons.check_circle
+                                    : Icons.account_tree_rounded,
+                                color: isSelected
+                                    ? AppTheme.primary
+                                    : const Color(0xFF1565C0),
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    pointName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 13,
+                                      color: Color(0xFF1A2340),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    isSelected
+                                        ? 'Active • $siteId'
+                                        : 'Tap to select • $siteId',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: isSelected
+                                          ? AppTheme.primary
+                                          : const Color(0xFF64748B),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Extracts the joined point name from a Supabase assignment row
+  /// (`thavvu_points(point_name)` may come back as a map or a list).
+  String? _pointName(Map<String, dynamic> row) {
+    final joined = row['thavvu_points'];
+    if (joined is Map) {
+      return joined['point_name']?.toString();
+    }
+    if (joined is List && joined.isNotEmpty) {
+      final first = joined.first;
+      if (first is Map) return first['point_name']?.toString();
+    }
+    return null;
+  }
+
+  /// Supervisor taps a Thavvu Point chip — becomes the active point for
+  /// every module (stored in ThavvuPointContext, honored by
+  /// AttendanceContextService.resolvePointId).
+  Future<void> _selectPoint(Map<String, dynamic> row) async {
+    final pointId = row['thavvu_point_id']?.toString();
+    final siteId = row['site_id']?.toString();
+    if (pointId == null) return;
+    await ThavvuPointContext.instance.select(pointId);
+    if (!mounted) return;
+    setState(() {
+      _thavvuIds['siteId'] = siteId ?? _thavvuIds['siteId'];
+      _supervisorData['site'] =
+          _pointName(row) ?? _supervisorData['site'];
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Working on ${_pointName(row) ?? pointId}'),
+        backgroundColor: AppTheme.primary,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: const Color(0xFF0F3460),
@@ -224,42 +507,48 @@ class _MainShellState extends State<MainShell>
       ),
       centerTitle: true,
       actions: [
-        // Thavvu ID badge - visible after login
+        // Thavvu ID badge - visible after login; shows the WORKING POINT
+        // selected for the session (tap to open the Thavvu IDs sheet).
         GestureDetector(
           onTap: () => _showThavvuIdsSheet(context),
-          child: Container(
-            margin: const EdgeInsets.only(right: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF1976D2), Color(0xFF0FA37A)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF1976D2).withOpacity(0.3),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
+          child: ListenableBuilder(
+            listenable: ThavvuPointContext.instance,
+            builder: (context, _) => Container(
+              margin: const EdgeInsets.only(right: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF1976D2), Color(0xFF0FA37A)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.verified_user, size: 14, color: Colors.white),
-                const SizedBox(width: 4),
-                Text(
-                  _thavvuIds['supervisorId'],
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    letterSpacing: 0.5,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF1976D2).withOpacity(0.3),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
                   ),
-                ),
-              ],
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.account_tree_rounded,
+                      size: 14, color: Colors.white),
+                  const SizedBox(width: 4),
+                  Text(
+                    ThavvuPointContext.instance.selectedPointId ??
+                        _thavvuIds['supervisorId'],
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -283,8 +572,8 @@ class _MainShellState extends State<MainShell>
                   decoration: BoxDecoration(
                     color: const Color(0xFFE53935),
                     shape: BoxShape.circle,
-                    border: Border.all(
-                        color: const Color(0xFF0F3460), width: 1.5),
+                    border:
+                        Border.all(color: const Color(0xFF0F3460), width: 1.5),
                   ),
                   alignment: Alignment.center,
                   child: Text(
@@ -411,6 +700,8 @@ class _MainShellState extends State<MainShell>
               ],
             ),
             const SizedBox(height: 20),
+            _buildWorkingPointSelector(context),
+            const SizedBox(height: 16),
             _buildIdCard(
               'Supervisor ID',
               _thavvuIds['supervisorId'],
@@ -424,28 +715,14 @@ class _MainShellState extends State<MainShell>
               Icons.location_city,
               const Color(0xFF0FA37A),
             ),
-            const SizedBox(height: 10),
-            _buildIdCard(
-              'HOD ID',
-              _thavvuIds['hodId'],
-              Icons.admin_panel_settings,
-              const Color(0xFF9C27B0),
-            ),
-            const SizedBox(height: 10),
-            _buildIdCard(
-              'Company Reg ID',
-              _thavvuIds['companyRegId'],
-              Icons.business,
-              const Color(0xFFE6A817),
-            ),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: const Color(0xFFE3F2FD),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: const Color(0xFF1976D2).withOpacity(0.2)),
+                border:
+                    Border.all(color: const Color(0xFF1976D2).withOpacity(0.2)),
               ),
               child: const Row(
                 children: [
@@ -453,9 +730,8 @@ class _MainShellState extends State<MainShell>
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'These IDs are automatically assigned by HOD and cannot be modified.',
-                      style: TextStyle(
-                          fontSize: 12, color: Color(0xFF1976D2)),
+                      'Select the Thavvu Point you are working on this session. All data you enter (attendance, stock, cash, tasks…) is stored under this point and reports are generated per point.',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF1976D2)),
                     ),
                   ),
                 ],
@@ -465,6 +741,144 @@ class _MainShellState extends State<MainShell>
           ],
         ),
       ),
+    );
+  }
+
+  /// The session Thavvu Point picker: lists every active point assigned to
+  /// this supervisor (from Supabase). Tap one to switch the working point —
+  /// the badge, every module write (via AttendanceContextService) and the
+  /// reports follow immediately.
+  Widget _buildWorkingPointSelector(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _activePointsFuture,
+      builder: (context, snapshot) {
+        final points = snapshot.data ?? const <Map<String, dynamic>>[];
+        if (snapshot.connectionState != ConnectionState.done ||
+            points.isEmpty) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8E1),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE6A817).withOpacity(0.4)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline, size: 18, color: Color(0xFFE6A817)),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'No Thavvu Point granted yet. Contact HOD for assignment.',
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFF7A5C00),
+                        fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+        return ListenableBuilder(
+          listenable: ThavvuPointContext.instance,
+          builder: (context, _) {
+            final selected = ThavvuPointContext.instance.selectedPointId;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.account_tree_rounded,
+                        size: 16, color: Color(0xFF0F3460)),
+                    SizedBox(width: 8),
+                    Text(
+                      'Working Point (This Session)',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0A1628),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                ...points.map((row) {
+                  final pointId = row['thavvu_point_id']?.toString() ?? '';
+                  final pointName = _pointName(row) ?? pointId;
+                  final isSelected = selected == pointId;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: GestureDetector(
+                      onTap: () => _selectPoint(row),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? const Color(0xFFE8F5E9)
+                              : Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected
+                                ? const Color(0xFF0FA37A)
+                                : const Color(0xFFE0E4F0),
+                            width: isSelected ? 2 : 1,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              isSelected
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_off,
+                              color: isSelected
+                                  ? const Color(0xFF0FA37A)
+                                  : Colors.grey.shade400,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(pointName,
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF0A1628))),
+                                  Text(pointId,
+                                      style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey)),
+                                ],
+                              ),
+                            ),
+                            if (isSelected)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0FA37A),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: const Text('Active',
+                                    style: TextStyle(
+                                        fontSize: 10,
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700)),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -569,56 +983,58 @@ class _MainShellState extends State<MainShell>
                     _buildDrawerPushTile(
                         'Machine Entry',
                         Icons.construction_rounded,
-                        () => _pushScreen(const MachinesEntryScreen(isHOD: false))),
+                        () => unawaited(_pushScreen(
+                            const SupervisorMachineEntryScreen()))),
                     _buildDrawerPushTile(
                         'Daily Data',
                         Icons.edit_calendar_rounded,
-                        () => _pushScreen(const DailyDataScreen())),
+                        () => unawaited(_pushScreen(const DailyDataScreen()))),
                     _buildDrawerPushTile(
                         'Attendance',
                         Icons.fingerprint_rounded,
-                        () => _pushScreen(const AttendanceScreen())),
+                        () => unawaited(_pushScreen(const AttendanceScreen()))),
                     const SizedBox(height: 8),
                     _buildDrawerSection('Modules'),
                     _buildDrawerModuleTile(
                         Icons.map_outlined,
                         'Maps & Specs',
-                        () => _pushScreen(const MapsScreen()),
+                        () => unawaited(_pushScreen(const MapsScreen())),
                         const Color(0xFF1976D2)),
-                    _buildDrawerModuleTile(
-                        Icons.assignment_outlined,
-                        'HOD Tasks',
-                        () => _pushScreen(const HODTasksScreen()),
-                        const Color(0xFF0FA37A)),
                     _buildDrawerModuleTile(
                         Icons.inventory_2_outlined,
                         'Stock Inventory',
-                        () => _pushScreen(const StockInventoryScreen()),
+                        () => unawaited(
+                            _pushScreen(const StockInventoryScreen())),
                         const Color(0xFFE6A817)),
-                    _buildDrawerModuleTile(
-                        Icons.swap_horiz_rounded,
-                        'Internal Transfers',
-                        () => _pushScreen(const InternalTransferScreen()),
-                        const Color(0xFF1976D2)),
                     _buildDrawerModuleTile(
                         Icons.key_outlined,
                         'Rental',
-                        () => _pushScreen(const RentalScreen()),
+                        () => unawaited(_pushScreen(const RentalScreen())),
                         const Color(0xFFE53935)),
+                    _buildDrawerModuleTile(
+                        Icons.account_balance_wallet_outlined,
+                        'Cash',
+                        () => unawaited(_pushScreen(const CashModuleScreen())),
+                        const Color(0xFF0FA37A)),
+                    _buildDrawerModuleTile(
+                        Icons.restaurant_menu_outlined,
+                        'Food',
+                        () => unawaited(_pushScreen(const FoodScreen())),
+                        const Color(0xFFE6A817)),
                     _buildDrawerModuleTile(
                         Icons.task_alt_outlined,
                         'Tasks & Checklist',
-                        () => _pushScreen(const TasksScreen()),
+                        () => unawaited(_pushScreen(const TasksScreen())),
                         const Color(0xFF0FA37A)),
                     _buildDrawerModuleTile(
                         Icons.bar_chart_rounded,
                         'Reports',
-                        () => _pushScreen(const ReportsScreen()),
+                        () => unawaited(_pushScreen(const ReportsScreen())),
                         const Color(0xFF9C27B0)),
                     _buildDrawerModuleTile(
                         Icons.more_horiz,
                         'Others',
-                        () => _pushScreen(const OthersScreen()),
+                        () => unawaited(_pushScreen(const OthersScreen())),
                         const Color(0xFF795548)),
                     // Thavvu IDs shortcut in drawer
                     const SizedBox(height: 8),
@@ -647,8 +1063,7 @@ class _MainShellState extends State<MainShell>
         decoration: BoxDecoration(
           color: const Color(0xFF1976D2).withOpacity(0.1),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-              color: const Color(0xFF1976D2).withOpacity(0.2)),
+          border: Border.all(color: const Color(0xFF1976D2).withOpacity(0.2)),
         ),
         child: Row(
           children: [
@@ -690,8 +1105,7 @@ class _MainShellState extends State<MainShell>
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right,
-                size: 16, color: Color(0xFF64B5F6)),
+            const Icon(Icons.chevron_right, size: 16, color: Color(0xFF64B5F6)),
           ],
         ),
       ),
@@ -761,20 +1175,24 @@ class _MainShellState extends State<MainShell>
           ),
           const SizedBox(height: 12),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(8)),
+              color: Colors.white.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withOpacity(0.1)),
+            ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.location_on, size: 11, color: Colors.white70),
-                const SizedBox(width: 4),
+                const Icon(Icons.location_on, size: 14, color: Colors.white70),
+                const SizedBox(width: 8),
                 Flexible(
                   child: Text(
                     _supervisorData['site'],
-                    style:
-                        const TextStyle(fontSize: 11, color: Colors.white70),
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -787,8 +1205,8 @@ class _MainShellState extends State<MainShell>
             decoration: BoxDecoration(
               color: const Color(0xFF0FA37A).withOpacity(0.25),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                  color: const Color(0xFF0FA37A).withOpacity(0.4)),
+              border:
+                  Border.all(color: const Color(0xFF0FA37A).withOpacity(0.4)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -824,8 +1242,7 @@ class _MainShellState extends State<MainShell>
     );
   }
 
-  Widget _buildDrawerPushTile(
-      String label, IconData icon, VoidCallback onTap) {
+  Widget _buildDrawerPushTile(String label, IconData icon, VoidCallback onTap) {
     return GestureDetector(
       onTap: () {
         Navigator.pop(context);
@@ -833,8 +1250,7 @@ class _MainShellState extends State<MainShell>
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
         child: Row(
           children: [
@@ -862,8 +1278,7 @@ class _MainShellState extends State<MainShell>
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
         child: Row(
           children: [
@@ -903,8 +1318,7 @@ class _MainShellState extends State<MainShell>
           GestureDetector(
             onTap: () => _confirmLogout(context),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
               decoration: BoxDecoration(
                 color: const Color(0xFFE53935).withOpacity(0.1),
                 borderRadius: BorderRadius.circular(12),
@@ -924,8 +1338,7 @@ class _MainShellState extends State<MainShell>
                         color: Color(0xFFEF9A9A)),
                   ),
                   Spacer(),
-                  Icon(Icons.chevron_right,
-                      size: 16, color: Color(0xFFEF9A9A)),
+                  Icon(Icons.chevron_right, size: 16, color: Color(0xFFEF9A9A)),
                 ],
               ),
             ),
@@ -939,36 +1352,30 @@ class _MainShellState extends State<MainShell>
   void _showNotificationsPanel(BuildContext context) {
     final notifications = [
       {
-        'icon': Icons.check_circle_rounded,
-        'color': const Color(0xFF0FA37A),
-        'title': 'Task Completed',
-        'body': 'Machine M-004 daily log submitted',
+        'icon': Icons.inventory_2_outlined,
+        'color': const Color(0xFFE6A817),
+        'title': 'HOD Stock Alert',
+        'body': 'Diesel low-stock, GIN and material return checks need review',
         'time': '2 min ago',
         'read': false,
       },
       {
-        'icon': Icons.warning_amber_rounded,
-        'color': const Color(0xFFE6A817),
-        'title': 'Low Diesel Alert',
-        'body': 'Batch D-012 below 20% threshold',
-        'time': '1 hr ago',
-        'read': false,
-      },
-      {
-        'icon': Icons.person_add_rounded,
-        'color': const Color(0xFF1976D2),
-        'title': 'New Worker Added',
-        'body': 'Karthik Kumar registered to Site A',
+        'icon': Icons.fingerprint_rounded,
+        'color': const Color(0xFF0FA37A),
+        'title': 'Attendance Alert',
+        'body':
+            'Check-in, check-out and outside-worker daily wage data pending',
         'time': '3 hrs ago',
         'read': false,
       },
       {
-        'icon': Icons.description_outlined,
+        'icon': Icons.apps_rounded,
         'color': const Color(0xFF9C27B0),
-        'title': 'Report Ready',
-        'body': 'Monthly machines summary available',
+        'title': 'Mandatory Module Alerts',
+        'body':
+            'Machine, daily data, rental, cash, food, tasks, reports, maps and others are alert-enabled',
         'time': 'Yesterday',
-        'read': true,
+        'read': false,
       },
     ];
 
@@ -1008,8 +1415,8 @@ class _MainShellState extends State<MainShell>
                       Navigator.pop(context);
                     },
                     child: const Text('Mark all read',
-                        style: TextStyle(
-                            fontSize: 12, color: Color(0xFF1976D2))),
+                        style:
+                            TextStyle(fontSize: 12, color: Color(0xFF1976D2))),
                   ),
                 ],
               ),
@@ -1041,8 +1448,7 @@ class _MainShellState extends State<MainShell>
                           width: 40,
                           height: 40,
                           decoration: BoxDecoration(
-                            color:
-                                (n['color'] as Color).withOpacity(0.1),
+                            color: (n['color'] as Color).withOpacity(0.1),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           alignment: Alignment.center,
@@ -1052,8 +1458,7 @@ class _MainShellState extends State<MainShell>
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
-                            crossAxisAlignment:
-                                CrossAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
                                 mainAxisAlignment:
@@ -1066,15 +1471,13 @@ class _MainShellState extends State<MainShell>
                                           color: Color(0xFF0A1628))),
                                   Text(n['time'] as String,
                                       style: const TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.grey)),
+                                          fontSize: 10, color: Colors.grey)),
                                 ],
                               ),
                               const SizedBox(height: 3),
                               Text(n['body'] as String,
                                   style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF555555))),
+                                      fontSize: 12, color: Color(0xFF555555))),
                             ],
                           ),
                         ),
@@ -1121,8 +1524,7 @@ class _MainShellState extends State<MainShell>
         builder: (_, scrollCtrl) => Container(
           decoration: const BoxDecoration(
             color: Color(0xFFF4F6FC),
-            borderRadius:
-                BorderRadius.vertical(top: Radius.circular(24)),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: ListView(
             controller: scrollCtrl,
@@ -1164,12 +1566,10 @@ class _MainShellState extends State<MainShell>
                           end: Alignment.bottomRight,
                         ),
                         border: Border.all(
-                            color: Colors.white.withOpacity(0.3),
-                            width: 2),
+                            color: Colors.white.withOpacity(0.3), width: 2),
                         boxShadow: [
                           BoxShadow(
-                            color:
-                                const Color(0xFF1976D2).withOpacity(0.4),
+                            color: const Color(0xFF1976D2).withOpacity(0.4),
                             blurRadius: 16,
                             offset: const Offset(0, 4),
                           )
@@ -1205,17 +1605,16 @@ class _MainShellState extends State<MainShell>
                     Text(
                       _supervisorData['role'],
                       style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.white.withOpacity(0.65)),
+                          fontSize: 12, color: Colors.white.withOpacity(0.65)),
                     ),
                     const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _profileBadge(
-                            Icons.badge, _supervisorData['empId']),
+                        _profileBadge(Icons.badge, _supervisorData['empId']),
                         const SizedBox(width: 8),
-                        _profileBadge(Icons.location_on, 'Site A'),
+                        _profileBadge(
+                            Icons.location_on, _supervisorData['site']),
                       ],
                     ),
                   ],
@@ -1281,9 +1680,7 @@ class _MainShellState extends State<MainShell>
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: _profileIdMini(
-                              'Site',
-                              _thavvuIds['siteId'],
+                          child: _profileIdMini('Site', _thavvuIds['siteId'],
                               const Color(0xFF0FA37A)),
                         ),
                       ],
@@ -1293,15 +1690,17 @@ class _MainShellState extends State<MainShell>
                       children: [
                         Expanded(
                           child: _profileIdMini(
-                              'HOD',
-                              _thavvuIds['hodId'],
+                              'Point',
+                              ThavvuPointContext
+                                      .instance.selectedPointId ??
+                                  '—',
                               const Color(0xFF9C27B0)),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: _profileIdMini(
-                              'Company',
-                              _thavvuIds['companyRegId'],
+                              'Role',
+                              _supervisorData['role'],
                               const Color(0xFFE6A817)),
                         ),
                       ],
@@ -1322,9 +1721,9 @@ class _MainShellState extends State<MainShell>
               const Divider(color: Color(0xFFE0E4F0)),
               const SizedBox(height: 8),
               _profileActionTile(Icons.edit_outlined, 'Edit Profile',
-                  const Color(0xFF1976D2), () {}),
+                  const Color(0xFF1976D2), () => _showEditProfileSheet(context)),
               _profileActionTile(Icons.lock_outline, 'Change Password',
-                  const Color(0xFF9C27B0), () {}),
+                  const Color(0xFF9C27B0), () => _changePassword(context)),
               _profileActionTile(Icons.support_agent_outlined, 'Contact HOD',
                   const Color(0xFF0FA37A), () {}),
               const SizedBox(height: 8),
@@ -1336,14 +1735,13 @@ class _MainShellState extends State<MainShell>
                   _confirmLogout(context);
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 14, horizontal: 18),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFEBEE),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                        color:
-                            const Color(0xFFEF9A9A).withOpacity(0.4)),
+                        color: const Color(0xFFEF9A9A).withOpacity(0.4)),
                   ),
                   child: const Row(
                     children: [
@@ -1364,6 +1762,242 @@ class _MainShellState extends State<MainShell>
               ),
               const SizedBox(height: 28),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Edit Profile: update name / phone on the `profiles` row and refresh
+  /// the shell immediately (no placeholders).
+  Future<void> _showEditProfileSheet(BuildContext context) async {
+    final formKey = GlobalKey<FormState>();
+    final nameCtrl = TextEditingController(text: _supervisorData['name']);
+    final phoneCtrl = TextEditingController(text: _supervisorData['phone']);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFFF4F6FC),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Edit Profile',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0A1628))),
+                const SizedBox(height: 4),
+                Text(_supervisorData['email'],
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.grey)),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Full Name',
+                    prefixIcon: Icon(Icons.person_outline, size: 20),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                        borderRadius:
+                            BorderRadius.all(Radius.circular(12))),
+                  ),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Enter your name'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: phoneCtrl,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Phone',
+                    prefixIcon: Icon(Icons.phone_outlined, size: 20),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                        borderRadius:
+                            BorderRadius.all(Radius.circular(12))),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1976D2),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () async {
+                      if (!formKey.currentState!.validate()) return;
+                      final ok = await _contextService.updateProfile(
+                        fullName: nameCtrl.text.trim(),
+                        phone: phoneCtrl.text.trim(),
+                      );
+                      if (!mounted) return;
+                      Navigator.pop(context);
+                      if (ok) {
+                        await _loadSupervisorWorkspace();
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text('Profile updated'),
+                            backgroundColor: const Color(0xFF0FA37A),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Failed to update profile'),
+                            backgroundColor: Color(0xFFE53935),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      }
+                    },
+                    child: const Text('Save Changes',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Change Password: updates the Supabase auth password for the session.
+  Future<void> _changePassword(BuildContext context) async {
+    final formKey = GlobalKey<FormState>();
+    final passCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFFF4F6FC),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Change Password',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0A1628))),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: passCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'New Password',
+                    prefixIcon: Icon(Icons.lock_outline, size: 20),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                        borderRadius:
+                            BorderRadius.all(Radius.circular(12))),
+                  ),
+                  validator: (v) => (v == null || v.length < 6)
+                      ? 'At least 6 characters'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: confirmCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Confirm Password',
+                    prefixIcon: Icon(Icons.lock_outline, size: 20),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                        borderRadius:
+                            BorderRadius.all(Radius.circular(12))),
+                  ),
+                  validator: (v) =>
+                      v != passCtrl.text ? 'Passwords do not match' : null,
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF9C27B0),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () async {
+                      if (!formKey.currentState!.validate()) return;
+                      try {
+                        await Supabase.instance.client.auth
+                            .updateUser(UserAttributes(password: passCtrl.text));
+                        if (!mounted) return;
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                'Password changed — use it on next login'),
+                            backgroundColor: Color(0xFF0FA37A),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      } catch (e) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Failed to change password'),
+                            backgroundColor: Color(0xFFE53935),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      }
+                    },
+                    child: const Text('Update Password',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1417,8 +2051,7 @@ class _MainShellState extends State<MainShell>
           Icon(icon, size: 11, color: Colors.white70),
           const SizedBox(width: 4),
           Text(label,
-              style:
-                  const TextStyle(fontSize: 11, color: Colors.white70)),
+              style: const TextStyle(fontSize: 11, color: Colors.white70)),
         ],
       ),
     );
@@ -1440,13 +2073,10 @@ class _MainShellState extends State<MainShell>
             const SizedBox(height: 6),
             Text(value,
                 style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: color)),
+                    fontSize: 16, fontWeight: FontWeight.w800, color: color)),
             const SizedBox(height: 2),
             Text(label,
-                style:
-                    const TextStyle(fontSize: 10, color: Colors.grey),
+                style: const TextStyle(fontSize: 10, color: Colors.grey),
                 textAlign: TextAlign.center),
           ],
         ),
@@ -1470,8 +2100,7 @@ class _MainShellState extends State<MainShell>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(label,
-                  style:
-                      const TextStyle(fontSize: 10, color: Colors.grey)),
+                  style: const TextStyle(fontSize: 10, color: Colors.grey)),
               Text(value,
                   style: const TextStyle(
                       fontSize: 13,
@@ -1490,8 +2119,7 @@ class _MainShellState extends State<MainShell>
       onTap: onTap,
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
@@ -1514,8 +2142,7 @@ class _MainShellState extends State<MainShell>
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF0A1628))),
             const Spacer(),
-            Icon(Icons.chevron_right,
-                size: 16, color: Colors.grey.shade300),
+            Icon(Icons.chevron_right, size: 16, color: Colors.grey.shade300),
           ],
         ),
       ),
@@ -1527,15 +2154,13 @@ class _MainShellState extends State<MainShell>
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Row(
           children: [
             Icon(Icons.logout_rounded, color: Color(0xFFE53935)),
             SizedBox(width: 10),
             Text('Log Out',
-                style: TextStyle(
-                    fontSize: 17, fontWeight: FontWeight.w800)),
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           ],
         ),
         content: const Text(
@@ -1545,17 +2170,16 @@ class _MainShellState extends State<MainShell>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel',
-                style: TextStyle(color: Colors.grey)),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
             onPressed: () async {
-              Navigator.pop(context);
+              final navigator = Navigator.of(context);
+              navigator.pop();
               await AuthService.logout();
               if (!mounted) return;
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(
-                    builder: (_) => const LoginScreen()),
+              navigator.pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
                 (_) => false,
               );
             },

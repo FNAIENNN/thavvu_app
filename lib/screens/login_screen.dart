@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
+import 'hod_approval_screen.dart';
 import 'main_shell.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -18,6 +21,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _obscurePassword = true;
   bool _isLoading = false;
   bool _rememberMe = false;
+  String _selectedRole = 'Supervisor';
 
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -37,8 +41,7 @@ class _LoginScreenState extends State<LoginScreen>
       duration: const Duration(milliseconds: 600),
       vsync: this,
     );
-    _fadeAnim =
-        CurvedAnimation(parent: _animController, curve: Curves.easeOut);
+    _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _slideAnim =
         Tween<Offset>(begin: const Offset(0, 0.1), end: Offset.zero).animate(
       CurvedAnimation(parent: _animController, curve: Curves.easeOut),
@@ -63,21 +66,51 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1800));
+
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    final isHod = _selectedRole == 'HOD';
+
+    try {
+      // Supabase Auth is the ONLY supported sign-in: every data operation
+      // goes through RLS, which requires a real authenticated session.
+      await AuthService.signInWithEmail(
+        email: email,
+        password: password,
+        role: _selectedRole,
+      );
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar(
+        'Login failed: ${e.message}. Use a valid Supabase account — '
+        'demo: ${isHod ? 'hod@thavvu.com / Hod@1234' : 'supervisor@thavvu.com / Super@1234'}',
+        const Color(0xFFE53935),
+      );
+      return;
+    } catch (e) {
+      // Catch-all for network / unexpected errors.
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar(
+        'Connection error: ${e.toString().replaceAll('Exception: ', '')}',
+        const Color(0xFFE53935),
+      );
+      return;
+    }
+
     if (!mounted) return;
-
-    // ── FIX #3: Persist session so splash skips login on next open ──
-    await AuthService.login(
-      _emailController.text,
-      'Supervisor',
-      name: 'Rajesh Kumar',
-      empId: 'EMP-001',
-    );
-
     setState(() => _isLoading = false);
+    // HOD logins pass through the owner-approval gate before the admin app.
+    final destination = isHod
+        ? HodApprovalScreen(
+            email: email,
+            isDemo: email.toLowerCase() == 'hod@thavvu.com',
+          )
+        : const MainShell();
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const MainShell(),
+        pageBuilder: (_, __, ___) => destination,
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
         transitionDuration: const Duration(milliseconds: 400),
@@ -88,22 +121,54 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _handleForgotPassword() async {
     if (_emailController.text.isEmpty) return;
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted) return;
-    setState(() => _isLoading = false);
-    _showSnackbar(
-        'Reset link sent to ${_emailController.text}', const Color(0xFF0FA37A));
-    _switchView(0);
+    try {
+      await Supabase.instance.client.auth.resetPasswordForEmail(
+        _emailController.text.trim(),
+      );
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar(
+          'Reset link sent to ${_emailController.text}', const Color(0xFF0FA37A));
+      _switchView(0);
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar(e.message, const Color(0xFFE53935));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar('Error: ${e.toString()}', const Color(0xFFE53935));
+    }
   }
 
   Future<void> _handleCreateAccount() async {
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted) return;
-    setState(() => _isLoading = false);
-    _showSnackbar(
-        'Account created! Pending HOD approval.', const Color(0xFF0FA37A));
-    _switchView(0);
+    try {
+      // Attempt to sign up via Supabase Auth with metadata.
+      await Supabase.instance.client.auth.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+        data: {
+          'role': 'supervisor',
+          'full_name': 'New Supervisor',
+        },
+      );
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar(
+          'Account created! Check your email for verification. '
+          'Full access requires HOD approval.',
+          const Color(0xFF0FA37A));
+      _switchView(0);
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar(e.message, const Color(0xFFE53935));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar('Error: ${e.toString()}', const Color(0xFFE53935));
+    }
   }
 
   void _showSnackbar(String message, Color color) {
@@ -112,8 +177,7 @@ class _LoginScreenState extends State<LoginScreen>
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(16),
       ),
     );
@@ -126,7 +190,11 @@ class _LoginScreenState extends State<LoginScreen>
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF0F3460), Color(0xFF1A1A3E), Color(0xFF0A1628)],
+            colors: [
+              AppTheme.primary,
+              AppTheme.accent,
+              Color(0xFF1E3A8A),
+            ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -159,7 +227,8 @@ class _LoginScreenState extends State<LoginScreen>
     return Column(
       children: [
         Container(
-          width: 80, height: 80,
+          width: 80,
+          height: 80,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
@@ -174,7 +243,9 @@ class _LoginScreenState extends State<LoginScreen>
             borderRadius: BorderRadius.circular(24),
             child: Image.asset(
               'assets/images/logo.png',
-              width: 80, height: 80, fit: BoxFit.cover,
+              width: 80,
+              height: 80,
+              fit: BoxFit.cover,
               errorBuilder: (_, __, ___) => Container(
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
@@ -198,15 +269,19 @@ class _LoginScreenState extends State<LoginScreen>
               TextSpan(
                 text: 'Thavvu ',
                 style: TextStyle(
-                  fontSize: 26, fontWeight: FontWeight.w800,
-                  color: Colors.white, letterSpacing: -0.5,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                  letterSpacing: -0.5,
                 ),
               ),
               TextSpan(
-                text: 'Supervisor',
+                text: 'Access',
                 style: TextStyle(
-                  fontSize: 26, fontWeight: FontWeight.w400,
-                  color: Color(0xFF4FC3F7), letterSpacing: -0.5,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w400,
+                  color: Color(0xFF4FC3F7),
+                  letterSpacing: -0.5,
                 ),
               ),
             ],
@@ -222,7 +297,9 @@ class _LoginScreenState extends State<LoginScreen>
           child: const Text(
             'Site Management · Simplified',
             style: TextStyle(
-              fontSize: 11, color: Colors.white60, letterSpacing: 0.5,
+              fontSize: 11,
+              color: Colors.white60,
+              letterSpacing: 0.5,
             ),
           ),
         ),
@@ -264,9 +341,11 @@ class _LoginScreenState extends State<LoginScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildCardHeader('Welcome Back', 'Sign in to continue',
-            Icons.lock_outline_rounded),
+        _buildCardHeader(
+            'Welcome Back', 'Sign in to continue', Icons.lock_outline_rounded),
         const SizedBox(height: 28),
+        _buildRoleSelector(),
+        const SizedBox(height: 18),
         _buildInputField(
           controller: _emailController,
           label: 'Employee ID / Email',
@@ -285,7 +364,8 @@ class _LoginScreenState extends State<LoginScreen>
           suffixIcon: IconButton(
             icon: Icon(
               _obscurePassword ? Icons.visibility_off : Icons.visibility,
-              size: 20, color: Colors.grey.shade400,
+              size: 20,
+              color: Colors.grey.shade400,
             ),
             onPressed: () =>
                 setState(() => _obscurePassword = !_obscurePassword),
@@ -301,11 +381,11 @@ class _LoginScreenState extends State<LoginScreen>
             Row(
               children: [
                 SizedBox(
-                  width: 20, height: 20,
+                  width: 20,
+                  height: 20,
                   child: Checkbox(
                     value: _rememberMe,
-                    onChanged: (v) =>
-                        setState(() => _rememberMe = v ?? false),
+                    onChanged: (v) => setState(() => _rememberMe = v ?? false),
                     activeColor: const Color(0xFF1976D2),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(5)),
@@ -339,8 +419,7 @@ class _LoginScreenState extends State<LoginScreen>
         const SizedBox(height: 12),
         Center(
           child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
               color: const Color(0xFFFFF8E1),
               borderRadius: BorderRadius.circular(12),
@@ -353,6 +432,66 @@ class _LoginScreenState extends State<LoginScreen>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildRoleSelector() {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF4FA),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE0E7F0)),
+      ),
+      child: Row(
+        children: [
+          _buildRoleOption('Supervisor', Icons.engineering_outlined),
+          _buildRoleOption('HOD', Icons.admin_panel_settings_outlined),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoleOption(String role, IconData icon) {
+    final selected = _selectedRole == role;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _selectedRole = role),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFF1976D2) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF1976D2).withOpacity(0.22),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon,
+                  size: 17,
+                  color: selected ? Colors.white : const Color(0xFF64748B)),
+              const SizedBox(width: 8),
+              Text(
+                role,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: selected ? Colors.white : const Color(0xFF334155),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -375,8 +514,10 @@ class _LoginScreenState extends State<LoginScreen>
           ),
         ),
         const SizedBox(height: 24),
-        _buildCardHeader('Reset Password',
-            'Enter your email to receive reset link', Icons.mail_outline_rounded),
+        _buildCardHeader(
+            'Reset Password',
+            'Enter your email to receive reset link',
+            Icons.mail_outline_rounded),
         const SizedBox(height: 28),
         _buildInputField(
           controller: _emailController,
@@ -393,8 +534,8 @@ class _LoginScreenState extends State<LoginScreen>
           decoration: BoxDecoration(
             color: const Color(0xFF1976D2).withOpacity(0.06),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-                color: const Color(0xFF1976D2).withOpacity(0.15)),
+            border:
+                Border.all(color: const Color(0xFF1976D2).withOpacity(0.15)),
           ),
           child: const Row(
             children: [
@@ -491,8 +632,7 @@ class _LoginScreenState extends State<LoginScreen>
           decoration: BoxDecoration(
             color: const Color(0xFFFFF8E1),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-                color: const Color(0xFFFFCC02).withOpacity(0.5)),
+            border: Border.all(color: const Color(0xFFFFCC02).withOpacity(0.5)),
           ),
           child: const Row(
             children: [
@@ -544,8 +684,7 @@ class _LoginScreenState extends State<LoginScreen>
                       color: Color(0xFF0A1628))),
               const SizedBox(height: 2),
               Text(subtitle,
-                  style: TextStyle(
-                      fontSize: 12, color: Colors.grey.shade500)),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
             ],
           ),
         ),
@@ -572,10 +711,8 @@ class _LoginScreenState extends State<LoginScreen>
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
-        hintStyle:
-            TextStyle(color: Colors.grey.shade400, fontSize: 12),
-        prefixIcon:
-            Icon(icon, size: 20, color: Colors.grey.shade500),
+        hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+        prefixIcon: Icon(icon, size: 20, color: Colors.grey.shade500),
         suffixIcon: suffixIcon,
         filled: true,
         fillColor: const Color(0xFFF8F9FC),
@@ -585,13 +722,11 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide:
-              BorderSide(color: Colors.grey.shade200, width: 1),
+          borderSide: BorderSide(color: Colors.grey.shade200, width: 1),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide:
-              const BorderSide(color: Color(0xFF1976D2), width: 1.5),
+          borderSide: const BorderSide(color: Color(0xFF1976D2), width: 1.5),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
@@ -599,8 +734,7 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         contentPadding:
             const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-        labelStyle:
-            TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        labelStyle: TextStyle(fontSize: 12, color: Colors.grey.shade600),
       ),
     );
   }
@@ -618,13 +752,14 @@ class _LoginScreenState extends State<LoginScreen>
           padding: const EdgeInsets.symmetric(vertical: 15),
           backgroundColor: const Color(0xFF1565C0),
           foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           elevation: 0,
         ),
         child: _isLoading
             ? const SizedBox(
-                width: 22, height: 22,
+                width: 22,
+                height: 22,
                 child: CircularProgressIndicator(
                     strokeWidth: 2.5, color: Colors.white))
             : Row(
@@ -653,8 +788,8 @@ class _LoginScreenState extends State<LoginScreen>
         style: OutlinedButton.styleFrom(
           padding: const EdgeInsets.symmetric(vertical: 14),
           side: const BorderSide(color: Color(0xFF1976D2), width: 1.5),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -675,18 +810,13 @@ class _LoginScreenState extends State<LoginScreen>
   Widget _buildDivider(String text) {
     return Row(
       children: [
-        Expanded(
-            child: Divider(
-                color: Colors.grey.shade300, thickness: 0.8)),
+        Expanded(child: Divider(color: Colors.grey.shade300, thickness: 0.8)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14),
           child: Text(text,
-              style: TextStyle(
-                  fontSize: 12, color: Colors.grey.shade500)),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         ),
-        Expanded(
-            child: Divider(
-                color: Colors.grey.shade300, thickness: 0.8)),
+        Expanded(child: Divider(color: Colors.grey.shade300, thickness: 0.8)),
       ],
     );
   }

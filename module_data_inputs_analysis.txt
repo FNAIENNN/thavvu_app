@@ -1,0 +1,447 @@
+================================================================================
+                    THAVVU APP - MODULE & DATA INPUTS ANALYSIS
+================================================================================
+This file compiles a detailed analysis of all data entry modules, user screens, 
+input types, data structures, and forms present in the Thavvu App codebase.
+It serves as the foundation for building the Reports Page.
+
+--------------------------------------------------------------------------------
+MODULE 1: LOGIN & SESSION MANAGEMENT
+--------------------------------------------------------------------------------
+File: lib/screens/login_screen.dart
+Purpose: Secure access for supervisor or other roles (HOD, Admin) and session establishment.
+
+User Input Elements:
+1. Email / Username Field
+   - Widget Type: TextFormField
+   - Controller: _emailController
+   - Input Type: text / email address
+   - Validation: Required, must be a valid email format.
+2. Password Field
+   - Widget Type: TextFormField
+   - Controller: _passwordController
+   - Input Type: text (obscured by default, toggleable visibility)
+   - Validation: Required, character length checks.
+3. Remember Me Checkbox
+   - Widget Type: Checkbox
+   - Variable: _rememberMe (boolean state)
+   - Input Type: Boolean toggle (Checked/Unchecked)
+
+Submission Logic:
+- Button: Login (ElevatedButton)
+- Target: FormState validation. Upon success, calls AuthService.login(email, role) 
+  which persists session variables (is_logged_in, user_name, user_email, user_role, emp_id) 
+  to SharedPreferences.
+
+--------------------------------------------------------------------------------
+MODULE 2: WORKERS & ATTENDANCE
+--------------------------------------------------------------------------------
+File: lib/screens/attendance_screen.dart & lib/screens/food_screen.dart
+Purpose: Tracking regular/outside workers, wages, advances, and shift-based food counts.
+
+User Input Elements:
+A. Daily Attendance Checklist (Regular Workers)
+   - Widget Type: Toggles / Gesture Detectors
+   - Input Type: Selection status per worker ('Present', 'Absent', 'Half day', 'Leave')
+   - Target Variable: Attendance status list map
+
+B. New Worker Enrollment
+   - Widget Type: TextFields inside bottom sheet / form
+   - Fields:
+     * Full Name (fullNameController) - Text
+     * Aadhar Number (aadharController) - Number string (12 digits)
+     * Referral Name (referralController) - Text
+     * Joining Date - DatePicker
+   - Attachments:
+     * Bank Book Photo - Camera/Gallery file picker
+     * Aadhar Photo - Camera/Gallery file picker
+     * Profile Photo - Camera/Gallery file picker
+   - Biometric Setup:
+     * Register Face Template - Callback triggers face extraction/storage
+     * Register Bio Template - Callback triggers fingerprint scanner simulation
+
+C. Outside Labor Attendance (Supplier & Batch Wise)
+   - Widget Type: TextFields & Dropdowns inside BottomSheet
+   - Fields:
+     * Supplier Selection - Dropdown list of labor suppliers OR
+     * Custom Supplier Name (_customSupplierController) - Text input (activated by switch)
+     * Custom Supplier Toggle - Switch (boolean)
+     * Worker Count (_countController) - Number input
+     * Wages per Shift (_wageControllers mapping) - Text/Number inputs:
+       - Morning Shift Wage (Default 300)
+       - Afternoon Shift Wage (Default 300)
+       - Full Day Shift Wage (Default 600)
+       - Others Shift Wage (Default 500)
+     * Batch Type / Shift - Selection dropdown (Morning, Afternoon, Full Day, Others)
+     * Custom Bill/Invoice Number (customBillController) - Text input
+     * Attachments: Bill Photo (tempBillPhotoPath) - Camera file capture
+
+D. Permanent Worker Payments & Advances Tab
+   - Widget Type: Search field & bottom sheet forms
+   - Search Field: Search permanent workers (_paymentSearchController) - Text input
+   - Add Used/Advance Amount Form:
+     * Used Amount (usedAmountController) - Number input
+     * Note / Description (noteController) - Text input (Default: 'Advance/used amount before salary')
+     * Transaction Mode - Selection (UPI, Bank transfer)
+   - Salary Payout Sheet:
+     * Cash Amount (_cashAmountController) - Number input
+     * Request Pay / Advance Amount (_advanceAmountController) - Number input
+     * IFSC Code (_ifscController) - Text input (Auto-fills on saved accounts)
+     * Account Number (_accNumController) - Number input (Auto-fills on saved accounts)
+     * Bank Name (_bankNameController) - Text input (Auto-fills on saved accounts)
+   - Adjust/Edit Cash Payment Dialog:
+     * Correct Cash Amount (editController / retrievedController) - Number input
+   - Saved Account Management (UPI & Bank):
+     * Add UPI: UPI ID (upiController) [Text], Account Name (bankController) [Text]
+     * Add Bank: Bank Name (bankNameController) [Text], Account Number (accountController) [Text], 
+       IFSC Code (ifscController) [Text], Holder Name (holderController) [Text]
+
+E. Food Management (lib/screens/food_screen.dart)
+   - Widget Type: Multi-select tags, Toggles, and TextFields
+   - Fields:
+     * Select Shifts for Food - Multi-select Tags (Morning, Afternoon, Evening)
+     * Food Attendance Checklist:
+       - Regular Workers - Toggles (Yes / No)
+       - Outside Workers - Toggles (Yes / No)
+       - Machine Workers - Toggles (Yes / No)
+     * Add Guests:
+       - Guest Name (_guestNameController) - Text input
+       - Guest Count (_guestCountController) - Number input
+     * Add Others:
+       - Item/Event Name (_otherNameController) - Text input
+       - Plate Count (_otherCountController) - Number input
+
+--------------------------------------------------------------------------------
+MODULE 3: MACHINES & FUEL MANAGEMENT
+--------------------------------------------------------------------------------
+File: lib/screens/machines_entry_screen_.dart & lib/screens/daily_data_screen.dart
+Purpose: Logging machine working time, operator assignments, fuel refills, and payments.
+
+User Input Elements:
+A. Machine Registration
+   - Widget Type: TextFormFields inside BottomSheet
+   - Fields:
+     * Machine Name (_newMachineNameController) - Text
+     * Vehicle Number (_newVehicleNumberController) - Text/Alphanumeric
+     * Operator Name (_newOperatorController) - Text
+     * Vehicle Type - Dropdown (e.g. Poclain, Tractor, Tipper, etc.)
+     * Billing Type - Dropdown (Hourly, Daily, Trip-wise)
+     * Diesel Included - Yes/No Toggle Switch
+
+B. Supervisor Diesel Log Entry (Drafts & Inward Logs)
+   - Widget Type: TextFields & Dropdowns
+   - Fields:
+     * Fuel Type - Dropdown selection (e.g., Diesel, Petrol)
+     * Stock Point - Dropdown selection (e.g., Main Diesel Stock, Yard Stock)
+     * No. of Litres (_draftLitersController / litersController) - Number
+     * Total Fuel Cost/Amount (_draftAmountController / amountController) - Number
+     * Remarks (_draftRemarksController / remarksController) - Text (Optional)
+
+C. Daily Data Machine Allocation & Time Blocks (lib/screens/daily_data_screen.dart)
+   - Widget Type: TextFields & TimePickers
+   - Fields:
+     * Machine Search - search machine by ID, type, location (_machineSearchController) - Text
+     * History Search - search log history (_historySearchController) - Text
+     * Add Time Block:
+       - Start Time - TimePicker dialog
+       - End Time - TimePicker dialog
+       - Destination / Remarks - Text
+       - Thavvu ID (Auto-selected or Text)
+       - Notes (_notesController) - Text
+     * Cash Payout Enable - SwitchListTile
+     * Cash Payout Amount (_cashAmountController / amountController) - Number
+     * Request Pay / Advance Amount (_advanceAmountController) - Number
+     * Manual Bank Details for Payout:
+       - Holder Name (holderController) - Text
+       - Account Number (_accNumController / accNumController) - Number
+       - Bank Name (_bankNameController / bankNameController) - Text
+       - IFSC Code (_ifscController / ifscController) - Alphanumeric
+       - UPI ID (upiController) - Text
+     * Retrieve/Return Fuel:
+       - Litres retrieved (retrievedController) - Number input
+     * Beta Management:
+       - Regular Beta Amount (_betaController) - Number input
+       - Enable Extra Beta - SwitchListTile
+       - Extra Beta Amount (_extraBetaController) - Number input
+       - Extra Beta Reason / HOD Note (_extraBetaNoteController) - Text input
+
+D. HOD Machine Verification & Payments (lib/screens/machines_entry_screen_.dart)
+   - Widget Type: TextFields, Switches, and Sliders
+   - Fields:
+     * Operator Name (_operatorNameController) - Text
+     * Machine ID (_machineIdController) - Text
+     * Total Amount (_amountController) - Number
+     * Used Amount (_usedAmountController) - Number
+     * Advance Amount (_advanceAmountController) - Number
+     * Used Advance Amount (_usedAdvanceAmountController) - Number
+     * Additional HOD Notes (_notesController) - Text
+     * Extra Verification Flags - SwitchListTile / Switch (e.g., matching readings)
+
+--------------------------------------------------------------------------------
+MODULE 4: RENTALS & TOOLS MANAGEMENT
+--------------------------------------------------------------------------------
+File: lib/screens/rental_screen.dart
+Purpose: Tracking external rented yard items, motor pumps, vehicle transport, and asset transfers.
+
+User Input Elements:
+A. Add Rental Item
+   - Widget Type: TextFields & Dropdowns inside Form
+   - Fields:
+     * Item Name (_itemController) - Text
+     * Quantity (_itemQuantityController) - Number (Default: 1)
+     * Rate (_rateController) - Number
+     * Billing Mode - Selection dropdown ('Per day', 'Per hour', 'Per month')
+     * Rental Fuel Enabled - SwitchListTile (boolean)
+
+B. Add Rental Fuel Log
+   - Widget Type: TextFields, Dropdowns & DatePickers
+   - Fields:
+     * Fuel Litres (_fuelLitresController / litreController) - Number
+     * Fuel Cost/Amount (_fuelController / amountController) - Number
+     * Odometer/Meter Reading (readingController) - Text/Number
+     * Date - DatePicker dialog
+     * Fuel Type - Dropdown selection
+     * Notes (_fuelRemarksController / notesController) - Text
+
+C. Add Aqua Tool (Catalog)
+   - Widget Type: TextFormFields inside BottomSheet
+   - Fields:
+     * Tool Name (nameController) - Text
+     * Rate (rateController) - Number
+     * Purpose (purposeController) - Text
+     * Category - Dropdown (e.g., Aeration, Pump, Tractor)
+     * District - Dropdown (e.g., Bhimavaram, Akividu)
+
+D. Add Vehicle Registration
+   - Widget Type: TextFormFields inside BottomSheet
+   - Fields:
+     * Vehicle Name (nameController) - Text
+     * Rate (rateController) - Number
+     * Thavvu ID (thavvuController) - Alphanumeric (Default: THV-VH-NEW)
+     * Billing Type - Dropdown (e.g., hourly, daily, trip)
+
+E. Vehicle Usage Entry Log
+   - Widget Type: TextFields & Dropdowns
+   - Fields:
+     * Tank ID (tankController) - Text (Default: TNK-AP-NEW)
+     * From Location (fromController) - Text (Default: Aqua yard)
+     * To Location (toController) - Text (Default: Pond work site)
+     * Operator Name (operatorController) - Text
+     * Usage Units (unitsController) - Number
+     * Rate per Unit (rateController) - Number
+     * Fuel Used (fuelController) - Number (Default: 0)
+     * Bata Paid (bataController) - Number (Default: 0)
+     * Loading Cost (loadingController) - Number (Default: 0)
+     * Notes (notesController) - Text
+     * Vehicle Status - Dropdown selection (Running, Breakdown, Idle)
+
+F. Asset Transfer Form
+   - Widget Type: TextFormFields inside BottomSheet
+   - Fields:
+     * Asset Name (nameController) - Text
+     * Batch ID (batchController) - Alphanumeric (Default: WE-AP-NEW)
+     * Rental ID (rentalController) - Alphanumeric (Default: RNT-AP-2026-NEW)
+     * Rented Quantity (rentedController) - Number (Default: 1)
+     * Returned Quantity (returnedController) - Number (Default: 0)
+     * Thavvu ID (thavvuController) - Alphanumeric (Default: THV-AP-NEW)
+     * Tank ID (tankController) - Alphanumeric (Default: TNK-AP-NEW)
+     * Site ID (siteController) - Text
+     * Site Address (addressController) - Text
+     * Asset Kind - Dropdown (e.g., workEquipment, consumable, asset)
+     * District - Dropdown (e.g., Bhimavaram, Akividu)
+
+G. Edit Rental Lifecycle (Pond/Tank Placement)
+   - Widget Type: TextFormFields & DatePickers
+   - Fields:
+     * Site Name (siteController) - Text
+     * Tank ID (tankController) - Text
+     * Field Label (fieldController) - Text
+     * Operator Name (operatorController) - Text
+     * Tank Entry Date - DatePicker
+     * Activation Date - DatePicker
+
+H. Settlement Bank Accounts
+   - Widget Type: TextFields
+   - Fields:
+     * Bank Name (nameController) - Text
+     * UPI ID (upiController) - Text
+     * Account Number (accountController) - Number
+     * IFSC Code (ifscController) - Alphanumeric
+     * Holder Name (holderController) - Text
+
+--------------------------------------------------------------------------------
+MODULE 5: STOCK & INVENTORY
+--------------------------------------------------------------------------------
+File: lib/screens/stock_inventory_screen.dart, lib/screens/internal_transfer_screen.dart, & lib/screens/transfers_screen.dart
+Purpose: Managing feed warehouse items, purchases, site consumption, and transfers.
+
+User Input Elements:
+A. Add Stock Item (Catalog)
+   - Widget Type: TextFormFields inside Form
+   - Fields:
+     * Item Name (nameController) - Text
+     * Unit of Measurement (unitController) - Text (Default: Nos, Kg, Liters)
+
+B. Stock Inward / Purchase Log
+   - Widget Type: TextFormFields & Dropdowns
+   - Fields:
+     * Quantity (line 1784) - Number input
+     * Narration / Note (line 1828) - Text input
+     * Invoice Number - Text
+     * Supplier - Dropdown selection
+     * Brand - Dropdown selection
+     * Shop - Dropdown selection
+
+C. Stock Outward / Return Log
+   - Widget Type: TextFormFields
+   - Fields:
+     * Return Reason (line 3467 / 4145) - Text
+     * Original Batch ID (line 4097) - Alphanumeric
+     * Quantity to Return (line 4129) - Number
+
+D. Stock Transfer Request
+   - Widget Type: TextFields, Dropdowns & Checklists
+   - Fields:
+     * Transfer ID (_transferIdController / line 6652) - Alphanumeric
+     * Internal Number (_internalNumberController / line 6661) - Alphanumeric
+     * Invoice Number (_invoiceNumberController / line 6670) - Alphanumeric
+     * Quantity to transfer (_quantityController) - Number
+     * Loose Quantity (_looseQuantityController) - Number
+     * Transfer Notes (_notesController) - Text
+     * Quality - Dropdown selection (Good, Damaged, Fair)
+     * Stock Point - Dropdown selection (From site points list)
+
+E. Stock Delivery Invoice Form
+   - Widget Type: TextFields & Map Quantities
+   - Fields:
+     * Delivered By (_deliveredByController) - Text
+     * Delivery Remark (_deliveryRemarkController) - Text
+     * Delivered Quantity per Item (_deliveredQtyControllers mapping) - Numbers
+     * Delivery Status - Dropdown (Pending Delivery, In Transit, Delivered)
+
+F. Stock Receiving Verification Checklist
+   - Widget Type: TextFields, Checkboxes & Map controllers
+   - Fields:
+     * Received By (_receivedByController) - Text
+     * Overall Receiving Note (_receivingRemarkController) - Text
+     * Item Checked Checks (_receivedChecks mapping) - Checkboxes (boolean)
+     * Received Quantity per Item (_receivedQtyControllers mapping) - Numbers
+     * Item Note per Item (_itemNoteControllers mapping) - Text fields
+
+G. Dedicated Internal Transfer Screens (lib/screens/internal_transfer_screen.dart & lib/screens/transfers_screen.dart)
+   - Widget Type: TextFields & Dropdowns
+   - Fields:
+     * Transfer ID (_transferIdController) - Alphanumeric
+     * Internal Number (_internalNumberController) - Alphanumeric
+     * Quantity to transfer (_quantityController) - Number
+     * Transfer Notes (_notesController) - Text
+     * Receiver Name (receiverNameController) - Text
+     * Source Stock Point - Dropdown
+     * Destination Stock Point - Dropdown
+     * Selected Stock Item - Dropdown
+
+--------------------------------------------------------------------------------
+MODULE 6: CASH & PAYMENTS
+--------------------------------------------------------------------------------
+File: lib/screens/cash_screen.dart
+Purpose: Managing supervisor cash-on-hand expenditures, advances, and transport split bills.
+
+User Input Elements:
+A. Cash Payout Log (Petty Cash Expenses)
+   - Widget Type: TextFields & Dropdowns
+   - Fields:
+     * Cash Amount (_amountController) - Number input
+     * Remarks (_remarkController) - Text input
+     * Expense Category - Dropdown selection (e.g., food, transport, salary, assets, others)
+     * Thavvu ID (_selectedThavvuId) - Dropdown selection of site IDs
+     * Asset Details (enabled only for 'assets' category):
+       - Item Name (_itemNameController) - Text
+       - Quantity (_itemQuantityController) - Number
+       - Price per Item (_itemAmountController) - Number
+     * Invoice Attachment - File path picker (temp path)
+
+B. Transport Split Bill Form
+   - Widget Type: TextFields, Checkboxes & Splits
+   - Fields:
+     * Total Transport Amount (_transportTotalController) - Number
+     * Split Mode - Toggle button selection (Equal Split vs Manual Split)
+     * Split Amounts Map (_splitAmounts mapping) - Number inputs (visible in Manual mode)
+     * Transport Remarks (_transportRemarkController) - Text
+     * Split Recipients - CheckboxListTile per supervisor/worker
+     * Attachments:
+       - Vehicle Photo (transportVehiclePhotoPath) - Camera file capture
+       - Invoice/Bill (transportInvoiceBillPath) - Camera file capture
+
+C. Request Pay (Request cash advance from office)
+   - Widget Type: TextFields, Uploads & Audio recording
+   - Fields:
+     * Request Amount (_requestAmountController) - Number
+     * Reason / Purpose (_requestReasonController) - Text
+     * Payment Method - Selection (UPI vs Bank Transfer)
+     * UPI ID (_upiIdController) - Text (only visible for UPI mode)
+     * Manual Bank Details (only visible for Bank mode):
+       - Bank Holder Name (_bankHolderNameController) - Text
+       - Account Number (_bankAccountNoController) - Number
+       - Bank Name / IFSC Code (_bankIfscCodeController) - Text / Alphanumeric
+     * Audio Note - Recording triggers voice file path
+     * Photo upload - Image file path selection
+     * Bill/Invoice upload - Image file path selection
+
+D. Contra Entry (Direct cash transfer between supervisors)
+   - Widget Type: Dropdown & TextField
+   - Fields:
+     * Recipient Supervisor ID (_contraSelectedToId) - Dropdown selection
+     * Contra Amount (_contraAmountController) - Number input
+
+--------------------------------------------------------------------------------
+MODULE 7: DAILY TASKS
+--------------------------------------------------------------------------------
+File: lib/screens/tasks_screen.dart & lib/screens/hod_tasks_screen.dart
+Purpose: Creating supervisor work logs, checking task checklists, and adding task comments.
+
+User Input Elements:
+1. Task Progress Notes
+   - Widget Type: TextField inside AlertDialog
+   - Controller: noteController
+   - Input Type: text
+   - Validation: Optional text note to attach to the task state update.
+2. Search Filters
+   - Widget Type: TextField search bar
+   - Input Type: text
+   - Action: Filters lists of tasks by title or assignee on-the-fly.
+
+--------------------------------------------------------------------------------
+MODULE 8: OTHER PETTY EXPENSES
+--------------------------------------------------------------------------------
+File: lib/screens/other_screens.dart
+Purpose: Logging fuel refill for supervision bikes and casual/guest snacks expenses.
+
+User Input Elements:
+A. Petrol Expenses
+   - Widget Type: TextFields & Dropdowns
+   - Fields:
+     * Quantity in Liters (_quantityController) - Number
+     * Total Amount paid (_amountController) - Number
+     * Notes / Odometer (_notesController) - Text
+     * Bike Selection - Dropdown selection of supervisor bikes (e.g. Hero Splendor)
+     * Payment Mode - Dropdown selection (Cash, UPI)
+
+B. Snacks & Extras Expenses
+   - Widget Type: TextFields & Dropdowns
+   - Fields:
+     * Brought By (_broughtByController) - Text (Supervisor Name)
+     * For Whom (_forWhomController) - Text (Site group / Guests)
+     * Items Purchased (_itemsController) - Text (Description of food/drinks)
+     * Total Cost (_costController) - Number
+     * Payment Mode - Dropdown selection (Cash, UPI, Request Pay)
+
+================================================================================
+                    SUMMARY STATISTICS OF DATA INPUT FIELDS
+================================================================================
+Number of distinct screens with data entry: 11 screens
+Number of Text Controllers tracked: 63 controllers
+Key Input widgets used: TextFormField, TextField, Checkbox, CheckboxListTile, 
+                       SwitchListTile, Switch, DatePicker, TimePicker, 
+                       Image/Camera picker, Audio recording.
+
+================================================================================

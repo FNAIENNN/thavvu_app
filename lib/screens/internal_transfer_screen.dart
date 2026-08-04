@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
+import '../widgets/collapsible_tab_scaffold.dart';
 
 // ─── Model ────────────────────────────────────────────────────────────────────
 class TransferRecord {
@@ -61,35 +61,30 @@ class _InternalTransferScreenState extends State<InternalTransferScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.surface,
-      appBar: AppBar(
-        title: const Text('Internal Transfers'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        bottom: TabBar(
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) => [
+          buildCollapsibleAppBar(
+            title: 'Internal Transfers',
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.pop(context),
+            ),
+            controller: _tabController,
+            tabs: const [
+              Tab(text: 'New Transfer'),
+              Tab(text: 'Delivering'),
+              Tab(text: 'Receiving'),
+            ],
+          ),
+        ],
+        body: TabBarView(
           controller: _tabController,
-          labelColor: AppTheme.primary,
-          unselectedLabelColor: AppTheme.textSecondary,
-          indicatorColor: AppTheme.primary,
-          indicatorWeight: 2.5,
-          isScrollable: true,
-          labelStyle:
-              const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-          tabs: const [
-            Tab(text: 'New Transfer', icon: Icon(Icons.send_outlined)),
-            Tab(text: 'Delivering', icon: Icon(Icons.local_shipping)),
-            Tab(text: 'Receiving', icon: Icon(Icons.inventory)),
+          children: [
+            NewTransferTab(),
+            const DeliveringTab(),
+            const ReceivingTab(),
           ],
         ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          NewTransferTab(),
-          const DeliveringTab(),
-          const ReceivingTab(),
-        ],
       ),
     );
   }
@@ -108,12 +103,12 @@ class _NewTransferTabState extends State<NewTransferTab> {
   String? _toPoint;
   String? _selectedItem;
   String? _selectedQuality;
-  String _receiverStatus = '';
   bool _initiated = false;
   String? _photoPath;
-  
+
   final TextEditingController _transferIdController = TextEditingController();
-  final TextEditingController _internalNumberController = TextEditingController();
+  final TextEditingController _internalNumberController =
+      TextEditingController();
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
 
@@ -144,8 +139,10 @@ class _NewTransferTabState extends State<NewTransferTab> {
   @override
   void initState() {
     super.initState();
-    _transferIdController.text = 'TRF-${DateTime.now().millisecondsSinceEpoch % 9000 + 1000}';
-    _internalNumberController.text = 'INT-${DateTime.now().millisecondsSinceEpoch % 90000 + 10000}';
+    _transferIdController.text =
+        'TRF-${DateTime.now().millisecondsSinceEpoch % 9000 + 1000}';
+    _internalNumberController.text =
+        'INT-${DateTime.now().millisecondsSinceEpoch % 90000 + 10000}';
   }
 
   @override
@@ -645,7 +642,9 @@ class _NewTransferTabState extends State<NewTransferTab> {
               _photoPath = _photoPath == null ? 'captured_photo.jpg' : null;
             });
             _showSnackbar(
-              _photoPath != null ? 'Photo captured successfully' : 'Photo removed',
+              _photoPath != null
+                  ? 'Photo captured successfully'
+                  : 'Photo removed',
               _photoPath != null ? AppTheme.success : AppTheme.info,
             );
           },
@@ -657,7 +656,8 @@ class _NewTransferTabState extends State<NewTransferTab> {
               border: Border.all(
                 color: _photoPath != null ? AppTheme.success : AppTheme.border,
                 width: _photoPath != null ? 2 : 1,
-                style: _photoPath != null ? BorderStyle.solid : BorderStyle.solid,
+                style:
+                    _photoPath != null ? BorderStyle.solid : BorderStyle.solid,
               ),
             ),
             child: _photoPath != null
@@ -1120,7 +1120,8 @@ class _DeliveringTabState extends State<DeliveringTab> {
             const SizedBox(height: 8),
             Row(
               children: [
-                _buildDetailChip(Icons.inventory_2, '${delivery['quantity']} units'),
+                _buildDetailChip(
+                    Icons.inventory_2, '${delivery['quantity']} units'),
                 const SizedBox(width: 8),
                 _buildDetailChip(Icons.verified, delivery['quality']),
                 const SizedBox(width: 8),
@@ -1130,21 +1131,26 @@ class _DeliveringTabState extends State<DeliveringTab> {
             const SizedBox(height: 8),
             Row(
               children: [
-                const Icon(Icons.arrow_upward, size: 12, color: AppTheme.danger),
+                const Icon(Icons.arrow_upward,
+                    size: 12, color: AppTheme.danger),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
                     delivery['from'],
-                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                    style: const TextStyle(
+                        fontSize: 11, color: AppTheme.textSecondary),
                   ),
                 ),
-                const Icon(Icons.arrow_forward, size: 12, color: AppTheme.textMuted),
-                const Icon(Icons.arrow_downward, size: 12, color: AppTheme.success),
+                const Icon(Icons.arrow_forward,
+                    size: 12, color: AppTheme.textMuted),
+                const Icon(Icons.arrow_downward,
+                    size: 12, color: AppTheme.success),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
                     delivery['to'],
-                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                    style: const TextStyle(
+                        fontSize: 11, color: AppTheme.textSecondary),
                   ),
                 ),
               ],
@@ -1169,17 +1175,14 @@ class _DeliveringTabState extends State<DeliveringTab> {
           Icon(icon, size: 10, color: AppTheme.textMuted),
           const SizedBox(width: 4),
           Text(text,
-              style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+              style:
+                  const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
         ],
       ),
     );
   }
 
   Widget _buildDeliveryConfirmationCard() {
-    final selectedDelivery = _pendingDeliveries.firstWhere(
-      (d) => d['id'] == _selectedTransfer,
-    );
-
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -1274,7 +1277,8 @@ class _DeliveringTabState extends State<DeliveringTab> {
         ),
         child: Column(
           children: [
-            Icon(icon, color: isSelected ? color : AppTheme.textMuted, size: 24),
+            Icon(icon,
+                color: isSelected ? color : AppTheme.textMuted, size: 24),
             const SizedBox(height: 6),
             Text(
               label,
@@ -1471,8 +1475,8 @@ class _ReceivingTabState extends State<ReceivingTab> {
               borderRadius: BorderRadius.circular(12),
             ),
             alignment: Alignment.center,
-            child: const Icon(Icons.inventory,
-                color: AppTheme.success, size: 22),
+            child:
+                const Icon(Icons.inventory, color: AppTheme.success, size: 22),
           ),
           const SizedBox(width: 14),
           const Expanded(
@@ -1600,7 +1604,8 @@ class _ReceivingTabState extends State<ReceivingTab> {
             const SizedBox(height: 8),
             Row(
               children: [
-                _buildDetailChip(Icons.inventory_2, '${receipt['quantity']} units'),
+                _buildDetailChip(
+                    Icons.inventory_2, '${receipt['quantity']} units'),
                 const SizedBox(width: 8),
                 _buildDetailChip(Icons.verified, receipt['quality']),
                 const SizedBox(width: 8),
@@ -1610,21 +1615,26 @@ class _ReceivingTabState extends State<ReceivingTab> {
             const SizedBox(height: 8),
             Row(
               children: [
-                const Icon(Icons.arrow_upward, size: 12, color: AppTheme.danger),
+                const Icon(Icons.arrow_upward,
+                    size: 12, color: AppTheme.danger),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
                     receipt['from'],
-                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                    style: const TextStyle(
+                        fontSize: 11, color: AppTheme.textSecondary),
                   ),
                 ),
-                const Icon(Icons.arrow_forward, size: 12, color: AppTheme.textMuted),
-                const Icon(Icons.arrow_downward, size: 12, color: AppTheme.success),
+                const Icon(Icons.arrow_forward,
+                    size: 12, color: AppTheme.textMuted),
+                const Icon(Icons.arrow_downward,
+                    size: 12, color: AppTheme.success),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
                     receipt['to'],
-                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                    style: const TextStyle(
+                        fontSize: 11, color: AppTheme.textSecondary),
                   ),
                 ),
               ],
@@ -1649,7 +1659,8 @@ class _ReceivingTabState extends State<ReceivingTab> {
           Icon(icon, size: 10, color: AppTheme.textMuted),
           const SizedBox(width: 4),
           Text(text,
-              style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+              style:
+                  const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
         ],
       ),
     );
@@ -1681,7 +1692,8 @@ class _ReceivingTabState extends State<ReceivingTab> {
               labelText: 'Receiver Name',
               hintText: 'Enter name of person receiving',
               prefixIcon: const Icon(Icons.person, size: 18),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             ),
             onChanged: (value) => _receiverName = value,
           ),
@@ -1760,7 +1772,8 @@ class _ReceivingTabState extends State<ReceivingTab> {
         ),
         child: Column(
           children: [
-            Icon(icon, color: isSelected ? color : AppTheme.textMuted, size: 24),
+            Icon(icon,
+                color: isSelected ? color : AppTheme.textMuted, size: 24),
             const SizedBox(height: 6),
             Text(
               label,

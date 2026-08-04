@@ -25,11 +25,20 @@ ios/build/
 .macos/
 
 # Web
-web/
+# build/web is ignored under Flutter/Dart section
 
 # Environment
 .env
 *.env
+.env.local
+
+# Local tooling / agent state
+.claude/
+.hermes/
+.local/
+
+# Logs
+*.log
 
 # OS files
 .DS_Store

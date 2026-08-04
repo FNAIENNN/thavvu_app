@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: '3.41.9' # must match the locally pinned stable channel
+  JAVA_VERSION: '17'
+
+jobs:
+  analyze_test:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        # Errors are fatal. Pre-existing cosmetic warnings/infos (deprecated
+        # member use, prefer_const, avoid_print) are tolerated on the current
+        # release branch — they do not block compilation or shipping.
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Test
+        run: flutter test
+
+  build_android:
+    name: Build Android (AppBundle + APKs)
+    needs: analyze_test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Ensure Android NDK 28.2.13676358 present
+        # build.gradle.kts pins this NDK for native debug-symbol stripping.
+        # AGP can auto-download it, but install it explicitly for reliability.
+        run: |
+          SDKM="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "ndk;28.2.13676358" >/dev/null 2>&1 || echo "sdkmanager NDK install unavailable; relying on AGP auto-install"
+          else
+            echo "sdkmanager not found; relying on AGP auto-install"
+          fi
+
+      - name: Configure release signing (if secrets present)
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" \
+              | base64 --decode > android/app/upload-keystore.jks
+            cat > android/key.properties <<EOF
+            storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+            keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+            keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+            storeFile=upload-keystore.jks
+            EOF
+          fi
+
+      - name: Build AppBundle
+        run: flutter build appbundle --release
+
+      - name: Build split-ABI APKs
+        run: flutter build apk --release --split-per-abi
+
+      - name: Upload AppBundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: appbundle
+          path: build/app/outputs/bundle/release/app-release.aab
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: apks
+          path: build/app/outputs/flutter-apk/*.apk
+
+  build_web:
+    name: Build Web
+    needs: analyze_test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Web
+        run: flutter build web --release
+
+      - name: Upload Web
+        uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: build/web
