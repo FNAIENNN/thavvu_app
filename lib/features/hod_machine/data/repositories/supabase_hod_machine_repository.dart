@@ -47,6 +47,7 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
     String? notes,
     required String createdBy,
   }) async {
+    final actor = _actorUuid(createdBy);
     final response = await _client.from('machine_suppliers').insert({
       'site_id': siteId,
       'name': name,
@@ -54,7 +55,7 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
       'phone': phone,
       'rating': rating ?? 0,
       'notes': notes,
-      'created_by': createdBy,
+      if (actor != null) 'created_by': actor,
     }).select().single();
 
     return MachineSupplier.fromJson(response);
@@ -80,13 +81,32 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
   Future<MachineAsset> createMachine({required MachineAsset machine}) async {
     // `machine_assets.id` is a client-supplied TEXT PK (e.g. MACHINE-001),
     // so we insert the full row including the id.
+    final json = machine.toJson();
+    // `created_by` is a UUID FK to profiles. The UI passes a human-readable
+    // emp code (e.g. "HOD-001"); resolve the authenticated user's real UUID
+    // so Postgres does not reject the insert with 22P02. Falls back to a
+    // provided UUID (tests) or omits the column (nullable since 00054).
+    final actor = _actorUuid(machine.createdBy);
+    if (actor != null) {
+      json['created_by'] = actor;
+    } else {
+      json.remove('created_by');
+    }
     final response = await _client
         .from('machine_assets')
-        .insert(machine.toJson())
+        .insert(json)
         .select()
         .single();
 
     return MachineAsset.fromJson(response);
+  }
+
+  @override
+  Future<void> deactivateMachine(String machineId) async {
+    await _client.from('machine_assets').update({
+      'is_active': false,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    }).eq('id', machineId);
   }
 
   // ── Daily Logs ─────────────────────────────────────────────
@@ -217,9 +237,23 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
   @override
   Future<MachinePaymentRequest> createPaymentRequest(
       MachinePaymentRequest request) async {
+    final json = request.toJson();
+    // `created_by` is a UUID FK to profiles; the UI passes an emp code
+    // (e.g. "HOD-001"). Resolve the authenticated user's real UUID.
+    final actor = _actorUuid(request.createdBy);
+    if (actor != null) {
+      json['created_by'] = actor;
+    } else {
+      json.remove('created_by');
+    }
+    // `hod_approved_by` / `paid_by` are nullable UUID FKs; drop any
+    // human-readable placeholder so Postgres cannot raise 22P02.
+    json['hod_approved_by'] = _uuidOrNull(request.hodApprovedBy);
+    json['paid_by'] = _uuidOrNull(request.paidBy);
+
     final response = await _client
         .from('machine_payment_requests')
-        .insert(request.toJson())
+        .insert(json)
         .select()
         .single();
 
@@ -267,11 +301,22 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
 
     final paymentMap = payment;
 
+    // `machine_finance_requests.hod_id` is a NOT NULL UUID FK. Resolve it
+    // from the payment's approved-by / created-by (both sanitized to real
+    // UUIDs on write) or the authenticated user; never send an emp code.
+    final hodActor = _uuidOrNull(paymentMap['hod_approved_by'] as String?) ??
+        _uuidOrNull(paymentMap['created_by'] as String?) ??
+        _actorUuid('');
+    if (hodActor == null) {
+      throw Exception(
+          'Cannot submit to finance: no valid HOD profile on this payment.');
+    }
+
     // Create finance request
     await _client.from('machine_finance_requests').insert({
       'payment_request_id': paymentId,
       'site_id': paymentMap['site_id'],
-      'hod_id': paymentMap['hod_approved_by'] ?? paymentMap['created_by'],
+      'hod_id': hodActor,
       'title': 'Finance for ${paymentMap['kind']} payment',
       'amount': paymentMap['amount'],
       'payment_mode': paymentMap['payment_mode'],
@@ -346,6 +391,20 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
     } catch (_) {
       // Audit failures must never block the primary workflow.
     }
+  }
+
+  /// Resolves the actor's profile UUID for writes that carry a UUID FK
+  /// (`created_by` on machine_assets / machine_suppliers).
+  ///
+  /// Prefers the authenticated user's id — the only value that satisfies
+  /// `REFERENCES profiles(id)` for a real logged-in user. Falls back to
+  /// [fallback] only when it is already a valid UUID (e.g. widget tests
+  /// that pass a fixed uuid). Human-readable ids such as "HOD-001" are
+  /// never sent to a uuid column, so Postgres cannot raise 22P02.
+  String? _actorUuid(String fallback) {
+    final uid = _client.auth.currentUser?.id;
+    if (uid != null && uid.isNotEmpty) return uid;
+    return _uuidOrNull(fallback);
   }
 
   /// Returns [value] when it is a valid UUID, otherwise null.

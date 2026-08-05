@@ -9,8 +9,11 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/attendance_context_service.dart';
 import '../services/device_file_picker.dart';
+import '../services/gin_repository.dart';
 import '../services/photo_upload_service.dart';
 import '../services/stock_inventory_repository.dart';
+import 'gin/gin_bill_details_screen.dart';
+import 'gin/gin_flow_tab.dart';
 import '../widgets/collapsible_tab_scaffold.dart';
 import 'hod_module_review_screen.dart';
 
@@ -604,7 +607,7 @@ class _StockInventoryScreenState extends State<StockInventoryScreen>
           children: [
             const _StockFeatureTab(),
             const _ViewOrdersTab(),
-            const _GINReviewTab(),
+            const GinFlowTab(),
             const _ReturnTab(),
             const StockTransferTab(),
             const _OtherConsumablesTab(),
@@ -4483,6 +4486,23 @@ class _ReturnTabState extends State<_ReturnTab> {
   int get _selectedItemCount =>
       _returnItems.where((item) => item.selected).length;
 
+  /// Total available stock for an item at the currently selected point
+  /// (summed across every batch at that point).
+  double _availableFor(String itemName) {
+    final point = _selectedStockPoint;
+    if (point == null) return 0;
+    return _liveBalances
+        .where((balance) =>
+            balance.stockPointName.trim().toLowerCase() ==
+                point.name.trim().toLowerCase() &&
+            balance.itemName.trim().toLowerCase() ==
+                itemName.trim().toLowerCase())
+        .fold(0.0, (sum, balance) => sum + balance.availableQty);
+  }
+
+  String _qty(double q) =>
+      q == q.roundToDouble() ? q.toInt().toString() : q.toString();
+
   int get _selectedTotalQuantity => _returnItems
       .where((item) => item.selected)
       .fold<int>(0, (sum, item) => sum + item.quantity);
@@ -4509,6 +4529,16 @@ class _ReturnTabState extends State<_ReturnTab> {
     if (stockPoint == null) {
       _showSnackbar('Please select a stock point.', AppTheme.danger,
           Icons.error_outline);
+      return;
+    }
+
+    final overStock = selectedItems.any(
+        (item) => item.quantity.toDouble() > _availableFor(item.itemName));
+    if (overStock) {
+      _showSnackbar(
+          'One or more items exceed the available stock at '
+          '${stockPoint.name}. Check the "Available" line on each item.',
+          AppTheme.warning, Icons.warning_amber_rounded);
       return;
     }
 
@@ -4845,6 +4875,8 @@ class _ReturnTabState extends State<_ReturnTab> {
                 style: const TextStyle(
                     fontSize: 11, color: AppTheme.textSecondary),
               ),
+              const SizedBox(height: 4),
+              _buildAvailableLine(item.itemName),
             ],
           ),
         ),
@@ -4871,6 +4903,41 @@ class _ReturnTabState extends State<_ReturnTab> {
           ),
         ),
       ]),
+    );
+  }
+
+  /// Shows the live available stock for an item at the selected point, right
+  /// inside the return line so the supervisor returns only what exists.
+  Widget _buildAvailableLine(String itemName) {
+    final available = _availableFor(itemName);
+    final hasPoint = _selectedStockPoint != null;
+    final Color color;
+    final String text;
+    if (!hasPoint) {
+      color = AppTheme.textMuted;
+      text = 'Select a stock point to see available stock';
+    } else if (available <= 0) {
+      color = AppTheme.danger;
+      text = 'No stock available at this point';
+    } else {
+      color = AppTheme.success;
+      text = 'Available: ${_qty(available)} units';
+    }
+    return Row(
+      children: [
+        Icon(hasPoint && available > 0
+            ? Icons.inventory_2_outlined
+            : Icons.error_outline,
+            size: 12, color: color),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(text,
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: color)),
+        ),
+      ],
     );
   }
 
@@ -5266,13 +5333,167 @@ class _GINBillDetailsScreenState extends State<GINBillDetailsScreen> {
 
   void _removeDoc(int index) => setState(() => _docs.removeAt(index));
 
-  /// Toggles the action on a bill line. First tap confirms the suggested
-  /// action; a second tap on the filled chip clears it so the user can re-pick.
-  void _toggleAction(int index) {
-    setState(() {
-      final item = widget.bill.items[index];
-      item.actionTaken = item.actionTaken == null ? item.suggestedAction : null;
-    });
+  /// Clears the action on a bill line so the supervisor can re-pick.
+  void _clearAction(int index) {
+    setState(() => widget.bill.items[index].actionTaken = null);
+  }
+
+  /// Sets an explicit action on a bill line (called from the action sheets).
+  void _setAction(int index, ReconciliationAction action) {
+    setState(() => widget.bill.items[index].actionTaken = action);
+  }
+
+  /// Opens the appropriate action bottom-sheet for a bill line.
+  void _openActionSheet(int index) {
+    final item = widget.bill.items[index];
+    if (item.status == ReconciliationStatus.shortage) {
+      _showShortageSheet(index, item);
+    } else if (item.status == ReconciliationStatus.excess) {
+      _showExtraSheet(index, item);
+    } else {
+      // Already matched — one tap confirms Done.
+      _setAction(index, ReconciliationAction.done);
+    }
+  }
+
+  void _showShortageSheet(int index, GINBillItem item) {
+    final diff = item.diffBilledReceived.abs();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _GINActionSheet(
+        title: 'Shortage Action',
+        titleColor: AppTheme.danger,
+        titleIcon: Icons.arrow_downward_rounded,
+        subtitle:
+            '${item.itemName}  ·  short by ${diff.toStringAsFixed(0)} units',
+        actions: const [
+          _SheetAction(
+            action: ReconciliationAction.reorder,
+            icon: Icons.replay_circle_filled,
+            color: AppTheme.warning,
+            label: 'Reorder',
+            description: 'Place a new purchase order for the missing units.',
+          ),
+          _SheetAction(
+            action: ReconciliationAction.done,
+            icon: Icons.check_circle_outline_rounded,
+            color: AppTheme.success,
+            label: 'Accept Shortage',
+            description: 'Accept with fewer units — update stock accordingly.',
+          ),
+          _SheetAction(
+            action: ReconciliationAction.extra,
+            icon: Icons.cancel_outlined,
+            color: AppTheme.danger,
+            label: 'Reject Delivery',
+            description: 'Reject this item entirely. Return to supplier.',
+          ),
+        ],
+        onPick: (a) {
+          Navigator.pop(context);
+          _setAction(index, a);
+          _showSnackbar(
+            _shortageActionLabel(a, item.itemName),
+            _actionSnackColor(a),
+            _actionSnackIcon(a),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showExtraSheet(int index, GINBillItem item) {
+    final diff = item.diffBilledReceived.abs();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _GINActionSheet(
+        title: 'Excess Stock Action',
+        titleColor: AppTheme.info,
+        titleIcon: Icons.arrow_upward_rounded,
+        subtitle:
+            '${item.itemName}  ·  excess by ${diff.toStringAsFixed(0)} units',
+        actions: const [
+          _SheetAction(
+            action: ReconciliationAction.reorder,
+            icon: Icons.local_shipping_outlined,
+            color: AppTheme.warning,
+            label: 'Return to Supplier',
+            description: 'Send back the extra units to the supplier.',
+          ),
+          _SheetAction(
+            action: ReconciliationAction.extra,
+            icon: Icons.add_circle_outline_rounded,
+            color: AppTheme.info,
+            label: 'Accept Extra',
+            description: 'Keep the extra stock and update inventory.',
+          ),
+          _SheetAction(
+            action: ReconciliationAction.done,
+            icon: Icons.tune_rounded,
+            color: AppTheme.success,
+            label: 'Adjust Inventory',
+            description: 'Manually adjust the stock count to match received.',
+          ),
+        ],
+        onPick: (a) {
+          Navigator.pop(context);
+          _setAction(index, a);
+          _showSnackbar(
+            _excessActionLabel(a, item.itemName),
+            _actionSnackColor(a),
+            _actionSnackIcon(a),
+          );
+        },
+      ),
+    );
+  }
+
+  String _shortageActionLabel(ReconciliationAction a, String name) {
+    switch (a) {
+      case ReconciliationAction.reorder:
+        return 'Reorder raised for "$name"';
+      case ReconciliationAction.done:
+        return 'Shortage accepted for "$name"';
+      case ReconciliationAction.extra:
+        return 'Delivery rejected for "$name"';
+    }
+  }
+
+  String _excessActionLabel(ReconciliationAction a, String name) {
+    switch (a) {
+      case ReconciliationAction.reorder:
+        return 'Return to supplier raised for "$name"';
+      case ReconciliationAction.extra:
+        return 'Extra stock accepted for "$name"';
+      case ReconciliationAction.done:
+        return 'Inventory adjusted for "$name"';
+    }
+  }
+
+  Color _actionSnackColor(ReconciliationAction a) {
+    switch (a) {
+      case ReconciliationAction.reorder:
+        return AppTheme.warning;
+      case ReconciliationAction.extra:
+        return AppTheme.info;
+      case ReconciliationAction.done:
+        return AppTheme.success;
+    }
+  }
+
+  IconData _actionSnackIcon(ReconciliationAction a) {
+    switch (a) {
+      case ReconciliationAction.reorder:
+        return Icons.replay_circle_filled;
+      case ReconciliationAction.extra:
+        return Icons.add_circle_outline_rounded;
+      case ReconciliationAction.done:
+        return Icons.check_circle_outline;
+    }
   }
 
   void _onSubmit() {
@@ -5562,7 +5783,8 @@ class _GINBillDetailsScreenState extends State<GINBillDetailsScreen> {
                 fontSize: 11, fontWeight: FontWeight.w700, color: color)),
       );
 
-  static const _colW = <double>[24, 120, 52, 52, 64, 58, 58, 64, 96];
+  // Col widths: #, Item, Ord, Billed, Rcvd, DiffBR, DiffOR, Status, Action
+  static const _colW = <double>[24, 120, 52, 52, 64, 58, 58, 64, 114];
   static const _gap = 8.0;
 
   Widget _buildTableHeader() {
@@ -5732,57 +5954,190 @@ class _GINBillDetailsScreenState extends State<GINBillDetailsScreen> {
     );
   }
 
-  /// Single context button per bill line. Defaults to the action suggested by
-  /// the received-vs-ordered diff (Reorder / Extra / Done). One tap confirms
-  /// (filled ✓), a second tap clears it so the user can re-pick.
+  /// Builds the ACTION column cell for a bill line.
+  /// - Matched  → filled green "Done" chip (one tap clears)
+  /// - Shortage → animated red "⬇ Shortage" button → opens shortage sheet
+  /// - Excess   → animated blue "⬆ Extra" button → opens excess sheet
+  /// After an action is picked the chip turns filled + a ✕ clear badge appears.
   Widget _buildActionCell(GINBillItem item, int idx) {
-    final action = item.actionTaken;
-    final suggested = item.suggestedAction;
-    final (label, icon, color) = _actionVisual(action ?? suggested);
-    final confirmed = action != null;
+    final confirmed = item.resolved;
+    final status = item.status;
 
-    return GestureDetector(
-      onTap: () => _toggleAction(idx),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-        decoration: BoxDecoration(
-          color: confirmed ? color : color.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-              color: confirmed ? color : color.withOpacity(0.4),
-              width: confirmed ? 0.8 : 1),
+    // ── Already resolved: show filled chip + clear button ─────────────────
+    if (confirmed) {
+      final (resolvedLabel, resolvedIcon, resolvedColor) =
+          _resolvedVisual(item.actionTaken!, status);
+      return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Expanded(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+            decoration: BoxDecoration(
+              color: resolvedColor,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(resolvedIcon, size: 11, color: Colors.white),
+                const SizedBox(width: 3),
+                Flexible(
+                  child: Text(resolvedLabel,
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white)),
+                ),
+              ],
+            ),
+          ),
         ),
-        alignment: Alignment.center,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(confirmed ? Icons.check_circle : icon,
-                size: 12, color: confirmed ? Colors.white : color),
-            const SizedBox(width: 3),
-            Text(label,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                    color: confirmed ? Colors.white : color)),
-          ],
+        const SizedBox(width: 4),
+        GestureDetector(
+          onTap: () => _clearAction(idx),
+          child: Container(
+            width: 20,
+            height: 20,
+            decoration: BoxDecoration(
+              color: AppTheme.textMuted.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.close_rounded,
+                size: 12, color: AppTheme.textMuted),
+          ),
         ),
-      ),
-    );
+      ]);
+    }
+
+    // ── Not yet resolved: show status-specific action button ───────────────
+    switch (status) {
+      case ReconciliationStatus.matched:
+        // Auto-resolve matched rows with a Done button
+        return GestureDetector(
+          onTap: () => _openActionSheet(idx),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppTheme.success.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.success.withOpacity(0.4)),
+            ),
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.check_circle_outline_rounded,
+                    size: 12, color: AppTheme.success),
+                const SizedBox(width: 3),
+                const Text('✓ Done',
+                    style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.success)),
+              ],
+            ),
+          ),
+        );
+
+      case ReconciliationStatus.shortage:
+        return GestureDetector(
+          onTap: () => _openActionSheet(idx),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppTheme.danger.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                  color: AppTheme.danger.withOpacity(0.45), width: 1.2),
+            ),
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.arrow_downward_rounded,
+                    size: 11, color: AppTheme.danger),
+                const SizedBox(width: 3),
+                const Text('Shortage',
+                    style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.danger)),
+                const SizedBox(width: 2),
+                const Icon(Icons.chevron_right_rounded,
+                    size: 11, color: AppTheme.danger),
+              ],
+            ),
+          ),
+        );
+
+      case ReconciliationStatus.excess:
+        return GestureDetector(
+          onTap: () => _openActionSheet(idx),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppTheme.info.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                  color: AppTheme.info.withOpacity(0.45), width: 1.2),
+            ),
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.arrow_upward_rounded,
+                    size: 11, color: AppTheme.info),
+                const SizedBox(width: 3),
+                const Text('Extra',
+                    style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.info)),
+                const SizedBox(width: 2),
+                const Icon(Icons.chevron_right_rounded,
+                    size: 11, color: AppTheme.info),
+              ],
+            ),
+          ),
+        );
+    }
   }
 
-  /// Label / icon / color triplet for a reconciliation action.
-  (String, IconData, Color) _actionVisual(ReconciliationAction action) {
-    switch (action) {
-      case ReconciliationAction.reorder:
-        return ('Reorder', Icons.replay_circle_filled, AppTheme.warning);
-      case ReconciliationAction.extra:
-        return ('Extra', Icons.add_circle_outline_rounded, AppTheme.info);
-      case ReconciliationAction.done:
-        return ('Done', Icons.check_circle_outline_rounded, AppTheme.success);
+  /// Returns label/icon/color for an already-resolved action, factoring in
+  /// whether the original status was shortage or excess for context.
+  (String, IconData, Color) _resolvedVisual(
+      ReconciliationAction action, ReconciliationStatus origStatus) {
+    if (origStatus == ReconciliationStatus.shortage) {
+      switch (action) {
+        case ReconciliationAction.reorder:
+          return ('Reorder', Icons.replay_circle_filled, AppTheme.warning);
+        case ReconciliationAction.done:
+          return ('Accepted', Icons.check_circle, AppTheme.success);
+        case ReconciliationAction.extra:
+          return ('Rejected', Icons.cancel, AppTheme.danger);
+      }
+    } else if (origStatus == ReconciliationStatus.excess) {
+      switch (action) {
+        case ReconciliationAction.reorder:
+          return ('Return', Icons.local_shipping, AppTheme.warning);
+        case ReconciliationAction.extra:
+          return ('Accepted', Icons.add_circle, AppTheme.info);
+        case ReconciliationAction.done:
+          return ('Adjusted', Icons.tune_rounded, AppTheme.success);
+      }
     }
+    // Matched
+    return ('Done', Icons.check_circle_outline_rounded, AppTheme.success);
   }
 
   Widget _buildTableFooter() {
@@ -6269,6 +6624,175 @@ class _GINConfirmDialog extends StatelessWidget {
                   fontSize: 12, color: color, fontWeight: FontWeight.w600)),
         ),
       ]);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GIN ACTION SHEET – Shortage / Excess contextual actions
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Immutable data holder for a single action option inside the sheet.
+class _SheetAction {
+  final ReconciliationAction action;
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String description;
+  const _SheetAction({
+    required this.action,
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.description,
+  });
+}
+
+/// Bottom sheet that presents 3 contextual action options for a discrepant
+/// bill line. Title and actions adapt based on whether it's a shortage or
+/// an excess situation.
+class _GINActionSheet extends StatelessWidget {
+  final String title;
+  final Color titleColor;
+  final IconData titleIcon;
+  final String subtitle;
+  final List<_SheetAction> actions;
+  final void Function(ReconciliationAction) onPick;
+
+  const _GINActionSheet({
+    required this.title,
+    required this.titleColor,
+    required this.titleIcon,
+    required this.subtitle,
+    required this.actions,
+    required this.onPick,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.12),
+              blurRadius: 24,
+              offset: const Offset(0, -4)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Handle bar ────────────────────────────────────────────
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 6),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppTheme.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // ── Header ────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+            child: Row(children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: titleColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: Icon(titleIcon, color: titleColor, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: titleColor)),
+                    const SizedBox(height: 2),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textSecondary)),
+                  ],
+                ),
+              ),
+            ]),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: Divider(height: 1),
+          ),
+          // ── Action tiles ──────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+            child: Column(
+              children: actions.map((a) => _buildTile(a)).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTile(_SheetAction a) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        onTap: () => onPick(a.action),
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            color: a.color.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: a.color.withOpacity(0.25)),
+          ),
+          child: Row(children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: a.color.withOpacity(0.14),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              alignment: Alignment.center,
+              child: Icon(a.icon, color: a.color, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(a.label,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: a.color)),
+                  const SizedBox(height: 3),
+                  Text(a.description,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textSecondary)),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios_rounded,
+                size: 14, color: a.color.withOpacity(0.5)),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -10789,24 +11313,73 @@ class _ViewOrdersTabState extends State<_ViewOrdersTab> {
     });
   }
 
-  Future<void> _receiveOrder(StockOrder order) async {
-    final ok = await _repo.markOrderReceived(order);
+  Future<void> _receiveOrder(StockOrderGroup group) async {
+    final result = await _repo.receiveOrderToGin(group.orderNo);
     if (!mounted) return;
+    if (result == null) {
+      _stockSnack(context, 'Failed to receive order — check with HOD',
+          AppTheme.danger);
+      _load();
+      return;
+    }
     _stockSnack(
       context,
-      ok
-          ? 'Order received → GIN created. Review it in the GIN tab.'
-          : 'Failed to receive order',
-      ok ? AppTheme.success : AppTheme.danger,
+      'Order received → GIN ${result['gin_no']} created. '
+      'Check items, pick actions and submit.',
+      AppTheme.success,
     );
-    if (ok) _load();
+    final bill = await GinRepository().fetchBill(result['id'] ?? '');
+    if (!mounted) return;
+    if (bill == null) {
+      _load();
+      return;
+    }
+    // Open the SAME reconciliation table the supervisor uses to check
+    // shortage / extra before it reaches HOD.
+    await Navigator.push<GinBill?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GinBillDetailsScreen(
+          bill: bill,
+          mode: GinReviewMode.supervisor,
+          repo: GinRepository(),
+          onChanged: (_) {},
+        ),
+      ),
+    );
+    if (mounted) _load();
+  }
+
+  /// Re-opens the GIN reconciliation table for this exact order so the
+  /// supervisor can continue checking shortage / extra / actions.
+  Future<void> _openOrderGin(StockOrderGroup group) async {
+    final bill = await GinRepository().fetchBillByOrderNo(group.orderNo);
+    if (!mounted) return;
+    if (bill == null) {
+      _stockSnack(context, 'No GIN bill found for ${group.orderNo} yet',
+          AppTheme.warning);
+      return;
+    }
+    await Navigator.push<GinBill?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GinBillDetailsScreen(
+          bill: bill,
+          mode: GinReviewMode.supervisor,
+          repo: GinRepository(),
+          onChanged: (_) {},
+        ),
+      ),
+    );
+    if (mounted) _load();
   }
 
   @override
   Widget build(BuildContext context) {
-    final placed = _orders.where((o) => o.status == 'placed').length;
-    final received = _orders
-        .where((o) => o.status == 'received' || o.status == 'added_to_stock')
+    final groups = StockOrderGroup.groupOrders(_orders);
+    final placed = groups.where((g) => g.status == 'placed').length;
+    final received = groups
+        .where((g) => g.status == 'received' || g.status == 'added_to_stock')
         .length;
 
     return SingleChildScrollView(
@@ -10896,17 +11469,17 @@ class _ViewOrdersTabState extends State<_ViewOrdersTab> {
               ),
             )
           else
-            ..._orders.map((order) => _buildOrderCard(order)),
+            ...groups.map((group) => _buildOrderCard(group)),
         ],
       ),
     );
   }
 
-  Widget _buildOrderCard(StockOrder order) {
+  Widget _buildOrderCard(StockOrderGroup group) {
     final Color statusColor;
     final IconData statusIcon;
     final String statusText;
-    switch (order.status) {
+    switch (group.status) {
       case 'received':
         statusColor = AppTheme.info;
         statusIcon = Icons.fact_check_outlined;
@@ -10943,7 +11516,7 @@ class _ViewOrdersTabState extends State<_ViewOrdersTab> {
           Row(
             children: [
               Expanded(
-                child: Text(order.orderNo,
+                child: Text(group.orderNo,
                     style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w800,
@@ -10971,62 +11544,64 @@ class _ViewOrdersTabState extends State<_ViewOrdersTab> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Icon(Icons.category_outlined,
-                  size: 16, color: AppTheme.textMuted),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(order.itemName,
-                    style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.textPrimary)),
-              ),
-              Text(
-                  '${_qty(order.quantity)} ${order.unit}',
-                  style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: AppTheme.primary)),
-            ],
-          ),
           const SizedBox(height: 8),
+          Text('${group.itemCount} item(s) · '
+              '${_qty(group.totalQuantity)} total',
+              style: const TextStyle(
+                  fontSize: 11.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 10),
+          for (final order in group.items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.category_outlined,
+                      size: 15, color: AppTheme.textMuted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(order.itemName,
+                        style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.textPrimary)),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('${_qty(order.quantity)} ${order.unit}',
+                      style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.primary)),
+                ],
+              ),
+            ),
+          const SizedBox(height: 4),
           Row(
             children: [
-              const Icon(Icons.qr_code_2,
-                  size: 14, color: AppTheme.textMuted),
-              const SizedBox(width: 6),
-              Text('Batch ${order.batch}',
-                  style: const TextStyle(
-                      fontSize: 12, color: AppTheme.textSecondary)),
-              const SizedBox(width: 14),
               const Icon(Icons.location_on_outlined,
                   size: 14, color: AppTheme.textMuted),
               const SizedBox(width: 4),
               Expanded(
-                child: Text(order.stockPointName,
+                child: Text(group.stockPointName,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         fontSize: 12, color: AppTheme.textSecondary)),
               ),
             ],
           ),
-          if (order.placedBy != null && order.placedBy!.isNotEmpty) ...[
+          if (group.placedBy != null && group.placedBy!.isNotEmpty) ...[
             const SizedBox(height: 6),
             Row(
               children: [
                 const Icon(Icons.person_outline,
                     size: 14, color: AppTheme.textMuted),
                 const SizedBox(width: 6),
-                Text('Placed by ${order.placedBy}',
+                Text('Placed by ${group.placedBy}',
                     style: const TextStyle(
                         fontSize: 11.5, color: AppTheme.textMuted)),
               ],
             ),
           ],
-          if (order.status == 'placed') ...[
+          if (group.canReceive) ...[
             const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
@@ -11038,11 +11613,35 @@ class _ViewOrdersTabState extends State<_ViewOrdersTab> {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                 ),
-                onPressed: () => _receiveOrder(order),
+                onPressed: () => _receiveOrder(group),
                 icon: const Icon(Icons.download_done_rounded, size: 18),
-                label: const Text('Received Order',
+                label: const Text('Received Order → GIN',
                     style: TextStyle(
                         fontSize: 13.5, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ],
+          if (!group.canReceive &&
+              (group.status == 'received' ||
+                  group.status == 'added_to_stock')) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _openOrderGin(group),
+                icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                label: Text(
+                    group.status == 'received'
+                        ? 'Open GIN — continue review'
+                        : 'View GIN table & actions',
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w700)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.primary,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
               ),
             ),
           ],

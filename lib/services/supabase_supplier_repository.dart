@@ -23,7 +23,7 @@ class SupabaseSupplierRepository {
   /// demo rows; everyone sees the real catalog.
   Future<List<Supplier>> fetchForSupervisor({String? siteId}) async {
     try {
-      var query = _client.from(table).select();
+      var query = _client.from(table).select().eq('active', true);
       if (siteId != null && siteId.isNotEmpty) {
         query = query.eq('site_id', siteId);
       }
@@ -35,6 +35,76 @@ class SupabaseSupplierRepository {
     } catch (e) {
       debugPrint('fetchForSupervisor failed: $e');
       return const [];
+    }
+  }
+
+  /// All suppliers including soft-deleted (active=false) — for management.
+  Future<List<Supplier>> fetchAll({String? siteId}) async {
+    try {
+      var query = _client.from(table).select();
+      if (siteId != null && siteId.isNotEmpty) {
+        query = query.eq('site_id', siteId);
+      }
+      final rows = await query.order('updated_at', ascending: false);
+      return (rows as List)
+          .map((row) => _fromRow(Map<String, dynamic>.from(row as Map)))
+          .where((s) => s.name.isNotEmpty)
+          .toList();
+    } catch (e) {
+      debugPrint('fetchAll suppliers failed: $e');
+      return const [];
+    }
+  }
+
+  /// Adds a brand-new supplier (permanent, active by default).
+  Future<bool> addSupplier({
+    required String name,
+    String? contactPerson,
+    String? phone,
+    String? address,
+    String? siteId,
+    String? thavvuPointId,
+    String? paymentUpi,
+    String? notes,
+  }) async {
+    try {
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) return false;
+      await _client.from(table).insert({
+        'id': 'SUP-${DateTime.now().millisecondsSinceEpoch}',
+        'group_name': 'General',
+        'name': trimmed,
+        'contact_person': contactPerson,
+        'phone': phone,
+        'address': address,
+        'site_id': siteId,
+        'thavvu_point_id': thavvuPointId,
+        'payment_upi': paymentUpi,
+        'notes': notes,
+        'active': true,
+        'is_demo': false,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('addSupplier failed: $e');
+      return false;
+    }
+  }
+
+  /// Soft-delete / restore a supplier (active=false hides it from the GIN
+  /// composer and every list; history is preserved).
+  Future<bool> setSupplierActive(String id, bool active) async {
+    try {
+      await _client.from(table).update({
+        'active': active,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', id);
+      return true;
+    } catch (e) {
+      debugPrint('setSupplierActive failed: $e');
+      return false;
     }
   }
 
@@ -89,6 +159,7 @@ class SupabaseSupplierRepository {
       createdByHodId: row['created_by_hod_id']?.toString() ?? 'HOD',
       createdAt: created,
       updatedAt: updated,
+      active: row['active'] as bool? ?? true,
     );
   }
 }

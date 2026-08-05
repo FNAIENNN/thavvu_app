@@ -19,6 +19,7 @@ import 'tasks_screen.dart';
 import 'reports_screen.dart';
 import 'maps_screen.dart';
 import 'other_screens.dart';
+import 'registry/registry_hub_screen.dart';
 import 'login_screen.dart';
 
 class MainShell extends StatefulWidget {
@@ -993,6 +994,11 @@ class _MainShellState extends State<MainShell>
                         'Attendance',
                         Icons.fingerprint_rounded,
                         () => unawaited(_pushScreen(const AttendanceScreen()))),
+                    _buildDrawerPushTile(
+                        'Manage Data',
+                        Icons.tune_rounded,
+                        () => unawaited(
+                            _pushScreen(const RegistryHubScreen()))),
                     const SizedBox(height: 8),
                     _buildDrawerSection('Modules'),
                     _buildDrawerModuleTile(

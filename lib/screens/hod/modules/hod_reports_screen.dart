@@ -47,12 +47,13 @@ class _HodReportsScreenState extends State<HodReportsScreen>
   bool _refreshing = false;
   String _currentSiteId = 'SITE-VJA-001';
   List<_SiteReport> _siteReports = <_SiteReport>[];
+  Map<String, Map<String, int>> _flow = {};
   RealtimeChannel? _cashChannel;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     unawaited(_initServer());
   }
 
@@ -88,9 +89,11 @@ class _HodReportsScreenState extends State<HodReportsScreen>
       final siteRows = (sites as List).cast<Map>();
 
       final reports = <_SiteReport>[];
+      final flow = <String, Map<String, int>>{};
       for (final row in siteRows) {
         final siteId = row['id']?.toString() ?? '';
         final live = await _aggregateSite(siteId);
+        flow[siteId] = await _aggregateFlow(siteId);
         reports.add(_SiteReport(
           siteId: siteId,
           siteName: row['name']?.toString() ?? siteId,
@@ -102,6 +105,7 @@ class _HodReportsScreenState extends State<HodReportsScreen>
       if (!mounted) return;
       setState(() {
         _siteReports = reports;
+        _flow = flow;
         _loading = false;
       });
     } catch (_) {
@@ -139,6 +143,20 @@ class _HodReportsScreenState extends State<HodReportsScreen>
       'cashSpent': results[6] as double,
       'cashBalance': results[7] as double,
     };
+  }
+
+  Future<Map<String, int>> _aggregateFlow(String siteId) async {
+    final results = await Future.wait([
+      _reportsRepo.registrySummary(siteId),
+      _reportsRepo.ordersSummary(siteId),
+      _reportsRepo.ginSummary(siteId),
+      _reportsRepo.flowSummary(siteId),
+    ]);
+    final merged = <String, int>{};
+    for (final map in results) {
+      merged.addAll(map);
+    }
+    return merged;
   }
 
   Future<void> _refreshAll() async {
@@ -313,6 +331,7 @@ class _HodReportsScreenState extends State<HodReportsScreen>
         Tab(text: 'Overview'),
         Tab(text: 'Sites'),
         Tab(text: 'Cash & Rental'),
+        Tab(text: 'Registries & Flow'),
       ],
       body: TabBarView(
         controller: _tabController,
@@ -320,8 +339,191 @@ class _HodReportsScreenState extends State<HodReportsScreen>
           _buildOverviewTab(),
           _buildSitesTab(),
           _buildCashRentalTab(),
+          _buildFlowTab(),
         ],
       ),
+    );
+  }
+
+  // ── Tab 4: Registries & Flow ─────────────────────────────────
+
+  Widget _buildFlowTab() {
+    if (_siteReports.isEmpty) {
+      return Center(
+        child: Text('No site data yet.',
+            style: TextStyle(color: AppTheme.textSecondary)),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _sectionTitle(Icons.tune_rounded,
+            'Registries & Workflow', 'All master data and every module entry in one place'),
+        _panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Master Data (active)',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textPrimary)),
+              const SizedBox(height: 12),
+              ..._siteReports.map((report) {
+                final flow = _flow[report.siteId] ?? const {};
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(report.siteName,
+                          style: const TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.primary)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          _flowStat(Icons.business_outlined, 'Suppliers',
+                              flow['suppliers'] ?? 0, AppTheme.info),
+                          _flowStat(Icons.person_outline, 'Workers',
+                              flow['workers'] ?? 0, AppTheme.success),
+                          _flowStat(Icons.construction_rounded, 'Machines',
+                              flow['machines'] ?? 0, AppTheme.warning),
+                          _flowStat(Icons.inventory_2_outlined, 'Items',
+                              flow['items'] ?? 0, AppTheme.primary),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        _panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Order → GIN Lifecycle',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textPrimary)),
+              const SizedBox(height: 12),
+              ..._siteReports.map((report) {
+                final flow = _flow[report.siteId] ?? const {};
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(report.siteName,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.textPrimary)),
+                      ),
+                      _pill('${flow['placed'] ?? 0} placed',
+                          AppTheme.warning),
+                      const SizedBox(width: 4),
+                      _pill('${flow['received'] ?? 0} received',
+                          AppTheme.info),
+                      const SizedBox(width: 4),
+                      _pill('${flow['added'] ?? 0} added',
+                          AppTheme.success),
+                      const SizedBox(width: 4),
+                      _pill('${flow['pending'] ?? 0} GIN pending',
+                          AppTheme.warning),
+                      const SizedBox(width: 4),
+                      _pill('${flow['approved'] ?? 0} approved',
+                          AppTheme.success),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        _panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Module Activity',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textPrimary)),
+              const SizedBox(height: 12),
+              ..._siteReports.map((report) {
+                final flow = _flow[report.siteId] ?? const {};
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(report.siteName,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.textPrimary)),
+                      ),
+                      _pill('${flow['movements'] ?? 0} stock moves',
+                          AppTheme.primary),
+                      const SizedBox(width: 4),
+                      _pill('${flow['transfers'] ?? 0} transfers',
+                          AppTheme.info),
+                      const SizedBox(width: 4),
+                      _pill('${flow['tasks'] ?? 0} tasks',
+                          AppTheme.warning),
+                      const SizedBox(width: 4),
+                      _pill('${flow['tasksDone'] ?? 0} done',
+                          AppTheme.success),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Widget _flowStat(IconData icon, String label, int value, Color color) {
+    return Expanded(
+      child: Column(
+        children: [
+          Icon(icon, size: 20, color: color),
+          const SizedBox(height: 4),
+          Text('$value',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: color)),
+          Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 9.5, color: AppTheme.textSecondary)),
+        ],
+      ),
+    );
+  }
+
+  Widget _pill(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 9.5, color: color, fontWeight: FontWeight.w700)),
     );
   }
 

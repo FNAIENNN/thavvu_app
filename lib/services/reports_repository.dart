@@ -384,6 +384,123 @@ class ReportsRepository {
     return entries;
   }
 
+  /// Registry counts: active suppliers, workers, machines, catalog items.
+  Future<Map<String, int>> registrySummary(String siteId) async {
+    try {
+      final suppliers = await _client
+          .from('suppliers')
+          .select('id')
+          .eq('active', true)
+          .limit(1000);
+      final workers = await _client
+          .from('workers')
+          .select('id')
+          .eq('site_id', siteId)
+          .eq('status', 'active')
+          .limit(1000);
+      final machines = await _client
+          .from('machine_assets')
+          .select('id')
+          .eq('site_id', siteId)
+          .eq('is_active', true)
+          .limit(1000);
+      final items = await _client
+          .from('stock_items')
+          .select('id')
+          .eq('is_active', true)
+          .limit(1000);
+      return {
+        'suppliers': (suppliers as List).length,
+        'workers': (workers as List).length,
+        'machines': (machines as List).length,
+        'items': (items as List).length,
+      };
+    } catch (_) {
+      return const {'suppliers': 0, 'workers': 0, 'machines': 0, 'items': 0};
+    }
+  }
+
+  /// Stock order lifecycle counts (placed / received / added_to_stock).
+  Future<Map<String, int>> ordersSummary(String siteId) async {
+    final summary = {'placed': 0, 'received': 0, 'added': 0};
+    try {
+      final rows = await _client
+          .from('stock_orders')
+          .select('status')
+          .eq('site_id', siteId)
+          .limit(1000);
+      for (final row in rows as List) {
+        final status = (row as Map)['status']?.toString() ?? 'placed';
+        if (status == 'placed') {
+          summary['placed'] = (summary['placed'] ?? 0) + 1;
+        } else if (status == 'received') {
+          summary['received'] = (summary['received'] ?? 0) + 1;
+        } else if (status == 'added_to_stock') {
+          summary['added'] = (summary['added'] ?? 0) + 1;
+        }
+      }
+    } catch (_) {}
+    return summary;
+  }
+
+  /// GIN lifecycle counts (pending / approved / rejected / added).
+  Future<Map<String, int>> ginSummary(String siteId) async {
+    final summary = {'pending': 0, 'approved': 0, 'rejected': 0, 'added': 0};
+    try {
+      final rows = await _client
+          .from('gin_bills')
+          .select('hod_status,status')
+          .eq('site_id', siteId)
+          .limit(1000);
+      for (final row in rows as List) {
+        final map = row as Map;
+        final hod = map['hod_status']?.toString() ?? 'pending';
+        if (hod == 'approved') {
+          summary['approved'] = (summary['approved'] ?? 0) + 1;
+        } else if (hod == 'rejected') {
+          summary['rejected'] = (summary['rejected'] ?? 0) + 1;
+        } else if ((map['status']?.toString() ?? '') == 'added_to_stock') {
+          summary['added'] = (summary['added'] ?? 0) + 1;
+        } else {
+          summary['pending'] = (summary['pending'] ?? 0) + 1;
+        }
+      }
+    } catch (_) {}
+    return summary;
+  }
+
+  /// Stock movement + task counts (all entries land in Reports).
+  Future<Map<String, int>> flowSummary(String siteId) async {
+    try {
+      final movements = await _client
+          .from('stock_movements')
+          .select('id')
+          .limit(1000);
+      final transfers = await _client
+          .from('stock_transfers')
+          .select('id')
+          .eq('site_id', siteId)
+          .limit(1000);
+      final tasks = await _client
+          .from('tasks')
+          .select('status')
+          .eq('site_id', siteId)
+          .limit(1000);
+      var done = 0;
+      for (final row in tasks as List) {
+        if ((row as Map)['status']?.toString() == 'approved') done++;
+      }
+      return {
+        'movements': (movements as List).length,
+        'transfers': (transfers as List).length,
+        'tasks': (tasks as List).length,
+        'tasksDone': done,
+      };
+    } catch (_) {
+      return const {'movements': 0, 'transfers': 0, 'tasks': 0, 'tasksDone': 0};
+    }
+  }
+
   static double _toDouble(Object? value) {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString() ?? '') ?? 0;

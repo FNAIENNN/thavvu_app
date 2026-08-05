@@ -7,7 +7,7 @@ import '../models/supervisor_cash_expense_model.dart';
 import '../services/auth_service.dart';
 import '../services/cash_allocation_service.dart';
 import '../services/attendance_context_service.dart';
-import '../services/cash_repository.dart' hide CashAllocation;
+import '../services/cash_repository.dart' as cash_repo;
 import '../services/hod_site_workspace_service.dart';
 import '../services/supervisor_cash_expense_service.dart';
 import '../theme/app_theme.dart';
@@ -518,10 +518,11 @@ class _CashModuleScreenState extends State<CashModuleScreen>
   final List<FinanceRequest> _financeRequests = [];
 
   // ── Supabase backend integration ──────────────────────────────
-  final CashRepository _cashRepo = CashRepository();
+  final cash_repo.CashRepository _cashRepo = cash_repo.CashRepository();
   final AttendanceContextService _contextService = AttendanceContextService();
   RealtimeChannel? _cashChannel;
   String _cashSiteId = 'SITE-VJA-001';
+  double? _supabaseSpentByMe;
 
   // History Tab - Filter (updated with Transport)
   String _selectedCategoryFilter = 'All';
@@ -550,16 +551,34 @@ class _CashModuleScreenState extends State<CashModuleScreen>
     final siteId = await _contextService.resolveSiteId();
     if (!mounted) return;
     _cashSiteId = (siteId == null || siteId.isEmpty) ? 'SITE-VJA-001' : siteId;
-    _cashChannel = _cashRepo.watchAll(_cashSiteId, _loadCashTransactions);
+    _cashChannel = _cashRepo.watchAll(_cashSiteId, () {
+      // Realtime: refresh both the ledger (spent) and the allocations
+      // (issued) so the Cash Summary stays live.
+      _loadCashTransactions();
+      _loadSupervisorCashData();
+    });
     await _loadCashTransactions();
+    await _loadSupervisorCashData();
   }
+
+  String? get _currentUid =>
+      Supabase.instance.client.auth.currentUser?.id;
 
   Future<void> _loadCashTransactions() async {
     try {
       final transactions =
           await _cashRepo.fetchTransactions(siteId: _cashSiteId);
       if (!mounted) return;
+      final uid = _currentUid;
+      // My own spend = transactions I created (Supabase cash_transactions
+      // carry created_by = profile uuid). Null uid (offline/test) scopes
+      // to the whole site as a safe fallback.
+      final mine = uid == null
+          ? transactions
+          : transactions.where((t) => t.createdBy == uid).toList();
+      final spent = mine.fold<double>(0, (sum, t) => sum + t.amount);
       setState(() {
+        _supabaseSpentByMe = spent;
         for (final record in transactions) {
           final exists = _allTransactions
               .any((txn) => txn.id == 'CASH-${record.txnNo}');
@@ -578,9 +597,46 @@ class _CashModuleScreenState extends State<CashModuleScreen>
           );
         }
       });
+      // Migrate any local-only expenses (submitted before this fix or
+      // while offline) into Supabase so HOD/Reports see them too.
+      unawaited(_migrateLocalExpensesToSupabase());
     } catch (_) {
       // Backend is best-effort; local ledger still works.
     }
+  }
+
+  /// Pushes local cash-pay expenses into Supabase cash_transactions so the
+  /// HOD and Reports always see the supervisor's spending. Idempotent:
+  /// txn_no is unique, so already-migrated rows are skipped.
+  Future<void> _migrateLocalExpensesToSupabase() async {
+    final uid = _currentUid;
+    if (uid == null) return;
+    try {
+      final remoteNos =
+          (await _cashRepo.fetchTransactions(siteId: _cashSiteId))
+              .map((t) => t.txnNo)
+              .toSet();
+      for (final expense in _supervisorCashExpenses) {
+        final txnNo = 'LOCAL-${expense.id}';
+        if (remoteNos.contains(txnNo)) continue;
+        try {
+          await _cashRepo.createTransaction(
+            siteId: _cashSiteId,
+            txnNo: txnNo,
+            type: 'expense',
+            amount: expense.amount,
+            method: 'cash',
+            category: expense.category,
+            note: expense.remarks,
+            proofPath: expense.invoiceBillPath.isEmpty
+                ? expense.vehiclePhotoPath
+                : expense.invoiceBillPath,
+          );
+        } catch (_) {
+          // A duplicate or transient failure is fine — retried next load.
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _bootstrapSupervisorCash() async {
@@ -616,25 +672,75 @@ class _CashModuleScreenState extends State<CashModuleScreen>
   Future<void> _loadHodCashAllocations() => _loadSupervisorCashData();
 
   Future<void> _loadSupervisorCashData() async {
-    final results = await Future.wait([
-      _cashAllocationService.allocationsForSupervisor(_currentSupervisorId),
-      _cashExpenseService.expensesForSupervisor(_currentSupervisorId),
-    ]);
-    final allocations = results[0] as List<CashAllocation>;
-    final expenses = results[1] as List<SupervisorCashExpense>;
-    if (!mounted) return;
-    setState(() {
-      _hodCashAllocations
-        ..clear()
-        ..addAll(allocations);
-      _supervisorCashExpenses
-        ..clear()
-        ..addAll(expenses);
-      _totalCashIssued = allocations.fold<double>(
-        0,
-        (sum, allocation) => sum + allocation.amount,
-      );
-    });
+    // PRIMARY: Supabase cash_allocations (what the HOD actually issues).
+    // The old local SharedPreferences store is only a fallback when the
+    // Supabase backend is unavailable (offline / not initialized).
+    try {
+      final uid = _currentUid;
+      final allocations =
+          await _cashRepo.fetchAllocations(siteId: _cashSiteId);
+      // Allocation targets the supervisor's profile; if none target this
+      // user, treat the site allocations as issued to the site.
+      final mine = uid == null
+          ? allocations
+          : allocations.where((a) => a.allocatedTo == uid).toList();
+      final effective = mine.isEmpty ? allocations : mine;
+      if (!mounted) return;
+      setState(() {
+        _hodCashAllocations
+          ..clear()
+          ..addAll(effective.map(_toLegacyAllocation));
+        _totalCashIssued = effective.fold<double>(
+          0,
+          (sum, allocation) => sum + allocation.amount,
+        );
+      });
+      return;
+    } catch (_) {
+      // Supabase unavailable — fall back to the legacy local store.
+    }
+
+    try {
+      final results = await Future.wait([
+        _cashAllocationService.allocationsForSupervisor(_currentSupervisorId),
+        _cashExpenseService.expensesForSupervisor(_currentSupervisorId),
+      ]);
+      final allocations = results[0] as List<CashAllocation>;
+      final expenses = results[1] as List<SupervisorCashExpense>;
+      if (!mounted) return;
+      setState(() {
+        _hodCashAllocations
+          ..clear()
+          ..addAll(allocations);
+        _supervisorCashExpenses
+          ..clear()
+          ..addAll(expenses);
+        _totalCashIssued = allocations.fold<double>(
+          0,
+          (sum, allocation) => sum + allocation.amount,
+        );
+      });
+    } catch (_) {}
+  }
+
+  /// Converts a Supabase cash_allocation row into the legacy display model
+  /// used by the history tab and summary.
+  CashAllocation _toLegacyAllocation(cash_repo.CashAllocation allocation) {
+    return CashAllocation(
+      id: allocation.id,
+      supervisorId: allocation.allocatedTo ?? _currentSupervisorId,
+      supervisorName: _currentSupervisorName,
+      siteId: allocation.siteId,
+      siteName: _thavvuNameFor(allocation.allocatedTo ?? _currentSupervisorId),
+      amount: allocation.amount,
+      purpose: allocation.note ?? 'HOD Cash Allocation',
+      category: 'cash',
+      paymentMode: 'cash',
+      reference: '',
+      notes: allocation.note ?? '',
+      issuedByHodId: allocation.allocatedBy,
+      issuedAt: allocation.createdAt ?? DateTime.now(),
+    );
   }
 
 
@@ -668,6 +774,10 @@ class _CashModuleScreenState extends State<CashModuleScreen>
 
 
   double get _totalSpentAllSites {
+    // Once Supabase is loaded, spend = this supervisor's own transactions
+    // (created_by = me). Fallback to the legacy local fold while offline.
+    final supabaseSpent = _supabaseSpentByMe;
+    if (supabaseSpent != null) return supabaseSpent;
     return _cashAccountTransactions.fold(0, (sum, txn) => sum + txn.amount);
   }
 
@@ -2352,6 +2462,31 @@ class _CashModuleScreenState extends State<CashModuleScreen>
       invoiceBillPath: _cashPayInvoiceBillPath ?? '',
       vehiclePhotoPath: _cashPayVehiclePhotoPath ?? '',
     );
+
+    // WRITE-THROUGH: persist this expense to Supabase cash_transactions so
+    // the HOD cash module and Reports see it. Best-effort; the local entry
+    // above is always kept and migrated if this fails.
+    try {
+      final proofPath = (_cashPayInvoiceBillPath ?? '').isEmpty
+          ? _cashPayVehiclePhotoPath
+          : _cashPayInvoiceBillPath;
+      await _cashRepo.createTransaction(
+        siteId: _cashSiteId,
+        txnNo: 'CASH-${DateTime.now().millisecondsSinceEpoch}',
+        type: 'expense',
+        amount: _cashPayItemsTotal,
+        method: 'cash',
+        category: _selectedCategory,
+        note:
+            '${_titleForCategory(_selectedCategory)}: $fullSummary - $remark',
+        proofPath: proofPath,
+      );
+      // Refresh immediately so the summary reflects the new spend.
+      await _loadCashTransactions();
+    } catch (_) {
+      // Offline / backend unavailable — local ledger is the fallback and
+      // will be migrated on the next successful load.
+    }
 
     await _loadSupervisorCashData();
 

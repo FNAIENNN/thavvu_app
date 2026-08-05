@@ -28,7 +28,8 @@ class AttendanceRepository {
   /// resolve theirs via `AttendanceContextService`).
   Future<List<WorkerProfile>> fetchWorkers({String? siteId}) async {
     try {
-      var query = _client.from(_workersTable).select();
+      var query =
+          _client.from(_workersTable).select().eq('status', 'active');
       if (siteId != null && siteId.isNotEmpty) {
         query = query.eq('site_id', siteId);
       }
@@ -39,6 +40,38 @@ class AttendanceRepository {
     } catch (e) {
       debugPrint('Error fetching workers: $e');
       return [];
+    }
+  }
+
+  /// All workers including soft-deleted (status != active) — for management.
+  Future<List<WorkerProfile>> fetchAllWorkers({String? siteId}) async {
+    try {
+      var query = _client.from(_workersTable).select();
+      if (siteId != null && siteId.isNotEmpty) {
+        query = query.eq('site_id', siteId);
+      }
+      final response = await query.order('name', ascending: true);
+      return (response as List)
+          .map((json) => WorkerProfile.fromJson(json as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('Error fetching all workers: $e');
+      return [];
+    }
+  }
+
+  /// Soft-delete / restore a worker (status='inactive' hides them from every
+  /// dropdown and attendance list; history is preserved).
+  Future<bool> setWorkerStatus(String workerId, String status) async {
+    try {
+      await _client.from(_workersTable).update({
+        'status': status,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', workerId);
+      return true;
+    } catch (e) {
+      debugPrint('setWorkerStatus failed: $e');
+      return false;
     }
   }
 

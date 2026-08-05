@@ -40,6 +40,9 @@ class _FakeMachineRepository implements HodMachineRepository {
       throw UnimplementedError('not used in widget test');
 
   @override
+  Future<void> deactivateMachine(String machineId) async {}
+
+  @override
   Future<List<MachineDailyLog>> getDailyLogs({
     required String siteId,
     String? thavvuPointId,

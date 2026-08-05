@@ -24,6 +24,10 @@ abstract class HodMachineRepository {
   Future<List<MachineAsset>> getMachines({required String siteId});
   Future<MachineAsset> createMachine({required MachineAsset machine});
 
+  /// Soft-delete a machine (is_active=false hides it from every dropdown
+  /// and the machine entry screen; history is preserved).
+  Future<void> deactivateMachine(String machineId);
+
   // ── Daily Logs ─────────────────────────────────────────────
   Future<List<MachineDailyLog>> getDailyLogs({
     required String siteId,

@@ -23,6 +23,7 @@ class Supplier {
   final String createdByHodId;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final bool active; // soft-delete flag (hidden from dropdowns when false)
 
   const Supplier({
     required this.id,
@@ -44,6 +45,7 @@ class Supplier {
     required this.createdByHodId,
     required this.createdAt,
     required this.updatedAt,
+    this.active = true,
   });
 
   bool get isTemporary => type == SupplierType.temporary;

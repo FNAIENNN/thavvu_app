@@ -3,11 +3,15 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
+import '../services/supervisor_registration_repository.dart';
 import 'hod_approval_screen.dart';
 import 'main_shell.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.registrationRepository});
+
+  /// Injectable for tests; defaults to the Supabase-backed implementation.
+  final SupervisorRegistrationRepository? registrationRepository;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -18,10 +22,20 @@ class _LoginScreenState extends State<LoginScreen>
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  // Create-account fields (kept as state so they survive rebuilds and are
+  // reachable from _handleCreateAccount).
+  final _nameCtrl = TextEditingController();
+  final _empIdCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _siteCtrl = TextEditingController();
+  final _createPassCtrl = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
   bool _rememberMe = false;
   String _selectedRole = 'Supervisor';
+
+  SupervisorRegistrationRepository get _regRepo =>
+      widget.registrationRepository ?? SupervisorRegistrationRepository();
 
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -54,6 +68,11 @@ class _LoginScreenState extends State<LoginScreen>
     _animController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _nameCtrl.dispose();
+    _empIdCtrl.dispose();
+    _phoneCtrl.dispose();
+    _siteCtrl.dispose();
+    _createPassCtrl.dispose();
     super.dispose();
   }
 
@@ -74,11 +93,38 @@ class _LoginScreenState extends State<LoginScreen>
     try {
       // Supabase Auth is the ONLY supported sign-in: every data operation
       // goes through RLS, which requires a real authenticated session.
-      await AuthService.signInWithEmail(
+      final realRole = await AuthService.signInWithEmail(
         email: email,
         password: password,
         role: _selectedRole,
       );
+
+      // The role toggle is a UX shortcut, NOT authorization. Route by the
+      // account's real role; if the toggle disagrees, sign out and explain.
+      final selectedIsHod = _selectedRole == 'HOD';
+      final realIsHod = realRole == 'hod';
+      if (realRole.isEmpty) {
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        await AuthService.signOut();
+        _showSnackbar(
+          'Could not verify this account\'s role. Contact the HOD.',
+          const Color(0xFFE53935),
+        );
+        return;
+      }
+      if (selectedIsHod != realIsHod) {
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        await AuthService.signOut();
+        final realLabel = realIsHod ? 'HOD' : 'Supervisor';
+        _showSnackbar(
+          'This account is registered as a $realLabel. '
+          'Select $realLabel on the login screen to continue.',
+          const Color(0xFFE53935),
+        );
+        return;
+      }
     } on AuthException catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -142,32 +188,42 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _handleCreateAccount() async {
+    if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
     try {
-      // Attempt to sign up via Supabase Auth with metadata.
-      await Supabase.instance.client.auth.signUp(
+      // Registration is a REQUEST, not a sign-up: no auth user is created
+      // until the HOD approves it. The server stores a bcrypt hash of the
+      // chosen password so the approved login works immediately.
+      final result = await _regRepo.submit(
+        fullName: _nameCtrl.text.trim(),
+        empId: _empIdCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim(),
+        siteName: _siteCtrl.text.trim(),
         email: _emailController.text.trim(),
-        password: _passwordController.text,
-        data: {
-          'role': 'supervisor',
-          'full_name': 'New Supervisor',
-        },
+        password: _createPassCtrl.text,
       );
       if (!mounted) return;
       setState(() => _isLoading = false);
-      _showSnackbar(
-          'Account created! Check your email for verification. '
-          'Full access requires HOD approval.',
-          const Color(0xFF0FA37A));
+      final message =
+          result['message']?.toString() ?? 'Request submitted for HOD approval.';
+      _showSnackbar(message, const Color(0xFF0FA37A));
+      _nameCtrl.clear();
+      _empIdCtrl.clear();
+      _phoneCtrl.clear();
+      _siteCtrl.clear();
+      _createPassCtrl.clear();
       _switchView(0);
-    } on AuthException catch (e) {
+    } on RegistrationSubmitException catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
       _showSnackbar(e.message, const Color(0xFFE53935));
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
-      _showSnackbar('Error: ${e.toString()}', const Color(0xFFE53935));
+      _showSnackbar(
+        'Error: ${e.toString().replaceAll('Exception: ', '')}',
+        const Color(0xFFE53935),
+      );
     }
   }
 
@@ -561,12 +617,6 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildCreateAccountForm() {
-    final nameCtrl = TextEditingController();
-    final empIdCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final siteCtrl = TextEditingController();
-    final createPassCtrl = TextEditingController();
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -589,43 +639,61 @@ class _LoginScreenState extends State<LoginScreen>
             Icons.person_add_outlined),
         const SizedBox(height: 24),
         _buildInputField(
-            controller: nameCtrl,
+            controller: _nameCtrl,
             label: 'Full Name',
             hint: 'Rajesh Kumar',
-            icon: Icons.person_outline),
+            icon: Icons.person_outline,
+            validator: (v) => v == null || v.trim().length < 3
+                ? 'Enter your full name'
+                : null),
         const SizedBox(height: 14),
         _buildInputField(
-            controller: empIdCtrl,
+            controller: _empIdCtrl,
             label: 'Employee ID',
             hint: 'EMP001',
-            icon: Icons.badge_outlined),
+            icon: Icons.badge_outlined,
+            validator: (v) => v == null || v.trim().length < 3
+                ? 'Enter your employee ID'
+                : null),
         const SizedBox(height: 14),
         _buildInputField(
-            controller: phoneCtrl,
+            controller: _phoneCtrl,
             label: 'Phone Number',
             hint: '+91 98765 43210',
             icon: Icons.phone_outlined,
-            keyboardType: TextInputType.phone),
+            keyboardType: TextInputType.phone,
+            validator: (v) {
+              final digits = (v ?? '').replaceAll(RegExp(r'[^0-9+]'), '');
+              return digits.length < 8 ? 'Enter a valid phone number' : null;
+            }),
         const SizedBox(height: 14),
         _buildInputField(
-            controller: siteCtrl,
+            controller: _siteCtrl,
             label: 'Site / Stock Point',
             hint: 'Site A - Chennai',
-            icon: Icons.location_on_outlined),
+            icon: Icons.location_on_outlined,
+            validator: (v) => v == null || v.trim().length < 2
+                ? 'Enter your site / stock point'
+                : null),
         const SizedBox(height: 14),
         _buildInputField(
             controller: _emailController,
             label: 'Email Address',
             hint: 'name@site.com',
             icon: Icons.email_outlined,
-            keyboardType: TextInputType.emailAddress),
+            keyboardType: TextInputType.emailAddress,
+            validator: (v) =>
+                v == null || !v.contains('@') ? 'Enter a valid email' : null),
         const SizedBox(height: 14),
         _buildInputField(
-            controller: createPassCtrl,
+            controller: _createPassCtrl,
             label: 'Create Password',
             hint: 'Minimum 6 characters',
             icon: Icons.lock_outline,
-            obscure: true),
+            obscure: true,
+            validator: (v) => v == null || v.length < 6
+                ? 'Password must be at least 6 characters'
+                : null),
         const SizedBox(height: 20),
         Container(
           padding: const EdgeInsets.all(14),

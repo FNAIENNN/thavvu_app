@@ -16,9 +16,12 @@ class AuthService {
   // ── Sign in via Supabase Auth ────────────────────────────────
 
   /// Authenticate with email + password via Supabase Auth.
-  /// On success, saves session metadata to SharedPreferences.
+  /// On success, saves session metadata to SharedPreferences using the
+  /// ACCOUNT's REAL role (user metadata first, then the profiles table) —
+  /// never the self-selected role, so a supervisor account cannot masquerade
+  /// as HOD. Returns the resolved role (lowercase, e.g. 'hod'/'supervisor').
   /// Throws [AuthException] on invalid credentials.
-  static Future<void> signInWithEmail({
+  static Future<String> signInWithEmail({
     required String email,
     required String password,
     required String role,
@@ -43,15 +46,42 @@ class AuthService {
         name;
     final displayEmpId =
         (meta['emp_id'] as String?)?.trim() ?? empId;
-    final displayRole =
-        (meta['role'] as String?)?.trim() ?? role;
+
+    // Resolve the REAL role: metadata first, then the profiles table
+    // (authoritative, self-readable via RLS), then empty.
+    var realRole = resolveRealRole(user.userMetadata);
+    if (realRole.isEmpty) {
+      try {
+        final rows = await Supabase.instance.client
+            .from('profiles')
+            .select('role')
+            .eq('id', user.id)
+            .limit(1);
+        if (rows.isNotEmpty) {
+          realRole = (rows.first['role']?.toString() ?? '').toLowerCase();
+        }
+      } catch (_) {
+        // RLS/network failure → keep empty; the login screen will reject the
+        // self-declared role rather than trusting it.
+      }
+    }
 
     await login(
       user.email ?? email,
-      displayRole,
+      realRole.isEmpty ? role : realRole,
       name: displayName.isNotEmpty ? displayName : name,
       empId: displayEmpId.isNotEmpty ? displayEmpId : empId,
     );
+    return realRole;
+  }
+
+  /// Resolves the account's REAL role from auth user metadata (lowercase).
+  /// Empty when the metadata carries no role — callers must then fall back
+  /// to the profiles table or reject the self-declared role.
+  static String resolveRealRole(Map<String, dynamic>? meta) {
+    final raw = meta?['role'];
+    if (raw is! String) return '';
+    return raw.trim().toLowerCase();
   }
 
   /// Sign out from Supabase and clear the local session.

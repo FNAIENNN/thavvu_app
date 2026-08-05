@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../services/attendance_context_service.dart';
+import '../../../services/gin_repository.dart';
 import '../../../services/stock_inventory_repository.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/collapsible_tab_scaffold.dart';
+import '../../gin/gin_bill_details_screen.dart';
 
 /// HOD Stock module — production dashboard.
 ///
@@ -48,18 +50,17 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
   final List<RealtimeChannel> _channels = <RealtimeChannel>[];
 
   // Place order form state.
-  String? _itemId;
   String _pointId = 'SP-001';
   String _pointName = 'Site A — North';
-  final _batchCtrl = TextEditingController();
-  final _qtyCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
+  final List<_HodOrderItemDraft> _orderDrafts = [];
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _addOrderDraft();
     _initServer();
   }
 
@@ -69,9 +70,10 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
       _repo.stopWatching(channel);
     }
     _tabController.dispose();
-    _batchCtrl.dispose();
-    _qtyCtrl.dispose();
     _notesCtrl.dispose();
+    for (final draft in _orderDrafts) {
+      draft.dispose();
+    }
     super.dispose();
   }
 
@@ -109,7 +111,6 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
         _ginBills = results[3] as List<StockGinBill>;
         _consumptions = results[4] as List<StockConsumption>;
         _transfers = results[5] as List<StockTransfer>;
-        _itemId ??= _items.isEmpty ? null : _items.first.id;
         if (_balances.isNotEmpty) {
           _pointId = _balances.first.stockPointId;
           _pointName = _balances.first.stockPointName;
@@ -181,55 +182,109 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
     return map;
   }
 
-  StockInventoryItem? get _selectedItem {
-    for (final i in _items) {
-      if (i.id == _itemId) return i;
-    }
-    return null;
-  }
-
   // ══════════════════════════════════════════════════════════════
   // ACTIONS
   // ══════════════════════════════════════════════════════════════
 
   Future<void> _placeOrder() async {
-    final item = _selectedItem;
-    if (item == null) {
-      _snack('Select an item', AppTheme.warning);
+    // Every line must have an item (picked or typed) and a quantity > 0.
+    final validItems = <_HodOrderItemDraft>[];
+    for (final draft in _orderDrafts) {
+      if (draft.manual) {
+        if (draft.nameCtrl.text.trim().isEmpty) {
+          _snack('Every order line needs an item name', AppTheme.warning);
+          return;
+        }
+      } else {
+        final item = _itemFor(draft.itemId);
+        if (item == null) {
+          _snack('Every order line needs an item selected', AppTheme.warning);
+          return;
+        }
+      }
+      final qty = double.tryParse(draft.qtyCtrl.text.trim()) ?? 0;
+      if (qty <= 0) {
+        _snack('Enter a valid quantity for every line', AppTheme.warning);
+        return;
+      }
+      validItems.add(draft);
+    }
+    if (validItems.isEmpty) {
+      _snack('Add at least one item to the order', AppTheme.warning);
       return;
     }
-    final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
-    if (qty <= 0) {
-      _snack('Enter a valid quantity', AppTheme.warning);
-      return;
-    }
+
+    final orderNo = 'ORD-${DateTime.now().millisecondsSinceEpoch}';
     setState(() => _saving = true);
-    final ok = await _repo.placeOrder(
-      orderNo: 'ORD-${DateTime.now().millisecondsSinceEpoch}',
+    final ok = await _repo.placeMultiOrder(
+      orderNo: orderNo,
       siteId: _siteId,
       stockPointId: _pointId,
       stockPointName: _pointName,
-      itemId: item.id,
-      itemName: item.name,
-      batch: _batchCtrl.text.trim().isEmpty
-          ? 'B-${item.code}-${DateTime.now().year}'
-          : _batchCtrl.text.trim(),
-      quantity: qty,
-      unit: item.uom,
-      notes: _notesCtrl.text.trim(),
       thavvuPointId: await _contextService.resolvePointId(),
+      notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+      items: [
+        for (final draft in validItems)
+          if (draft.manual)
+            StockOrderItemDraft(
+              itemName: draft.nameCtrl.text.trim(),
+              itemCode: draft.nameCtrl.text.trim(),
+              unit: draft.uomCtrl.text.trim().isEmpty
+                  ? 'units'
+                  : draft.uomCtrl.text.trim(),
+              batch: draft.batchCtrl.text.trim().isEmpty
+                  ? null
+                  : draft.batchCtrl.text.trim(),
+              quantity: double.tryParse(draft.qtyCtrl.text.trim()) ?? 0,
+            )
+          else
+            StockOrderItemDraft(
+              itemId: draft.itemId,
+              itemName: _itemFor(draft.itemId)!.name,
+              itemCode: _itemFor(draft.itemId)!.code,
+              unit: _itemFor(draft.itemId)!.uom,
+              batch: draft.batchCtrl.text.trim().isEmpty
+                  ? null
+                  : draft.batchCtrl.text.trim(),
+              quantity: double.tryParse(draft.qtyCtrl.text.trim()) ?? 0,
+            ),
+      ],
     );
     if (!mounted) return;
     setState(() => _saving = false);
     if (ok) {
-      _snack('Order placed — supervisor can receive it in Stock → View Orders',
-          AppTheme.success);
-      _qtyCtrl.clear();
+      _snack('Order $orderNo placed with ${validItems.length} item(s) — '
+          'supervisor receives it in Stock → View Orders → GIN', AppTheme.success);
       _notesCtrl.clear();
+      for (final draft in _orderDrafts) {
+        draft.dispose();
+      }
+      _orderDrafts.clear();
+      _addOrderDraft();
       _tabController.animateTo(3);
     } else {
       _snack('Failed to place order', AppTheme.danger);
     }
+  }
+
+  StockInventoryItem? _itemFor(String? itemId) {
+    if (itemId == null) return null;
+    for (final item in _items) {
+      if (item.id == itemId) return item;
+    }
+    return null;
+  }
+
+  void _addOrderDraft() {
+    setState(() => _orderDrafts.add(_HodOrderItemDraft()));
+  }
+
+  void _removeOrderDraft(int index) {
+    if (_orderDrafts.length <= 1) {
+      _snack('Keep at least one order line', AppTheme.warning);
+      return;
+    }
+    setState(() => _orderDrafts.removeAt(index).dispose());
   }
 
   Future<void> _reviewGin(StockGinBill bill, {required String status}) async {
@@ -1233,7 +1288,7 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
                               color: AppTheme.textPrimary)),
                       SizedBox(height: 3),
                       Text(
-                          'The supervisor receives this order in Stock → View Orders and reviews it in GIN.',
+                          'Add multiple items in ONE order. The supervisor receives it in Stock → View Orders and reviews it in GIN.',
                           style: TextStyle(
                               fontSize: 12,
                               color: AppTheme.textSecondary)),
@@ -1244,19 +1299,38 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
             ),
           ),
           const SizedBox(height: 16),
-          DropdownButtonFormField<String>(
-            initialValue: _itemId,
-            isExpanded: true,
-            decoration: _dec('Item', Icons.category_outlined),
-            items: _items
-                .map((i) => DropdownMenuItem(
-                    value: i.id,
-                    child: Text('${i.name} (${i.uom})',
-                        overflow: TextOverflow.ellipsis)))
-                .toList(),
-            onChanged: (v) => setState(() => _itemId = v),
+          Row(
+            children: [
+              const Icon(Icons.playlist_add_check_circle_outlined,
+                  color: AppTheme.primary, size: 18),
+              const SizedBox(width: 8),
+              const Text('Order Items',
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textPrimary)),
+              const Spacer(),
+              Text('${_orderDrafts.length} line(s)',
+                  style: const TextStyle(
+                      fontSize: 11, color: AppTheme.textSecondary)),
+            ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
+          for (var i = 0; i < _orderDrafts.length; i++)
+            _buildOrderItemRow(i),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _addOrderDraft,
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('Add Another Item'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppTheme.primary,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+          const SizedBox(height: 16),
           DropdownButtonFormField<String>(
             initialValue: _points.keys.contains(_pointId) ? _pointId : null,
             isExpanded: true,
@@ -1275,20 +1349,9 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
           ),
           const SizedBox(height: 12),
           TextField(
-            controller: _batchCtrl,
-            decoration: _dec('Batch (optional)', Icons.qr_code_2),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _qtyCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: _dec('Quantity', Icons.numbers_outlined),
-          ),
-          const SizedBox(height: 12),
-          TextField(
             controller: _notesCtrl,
             maxLines: 2,
-            decoration: _dec('Notes (optional)', Icons.notes_outlined),
+            decoration: _dec('Order Notes (optional)', Icons.notes_outlined),
           ),
           const SizedBox(height: 18),
           SizedBox(
@@ -1309,10 +1372,180 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.add_shopping_cart_outlined, size: 18),
-              label: const Text('Place Order',
-                  style:
-                      TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+              label: Text(
+                _saving
+                    ? 'Placing Order...'
+                    : 'Place Order (${_orderDrafts.length} item${_orderDrafts.length == 1 ? '' : 's'})',
+                style: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w700),
+              ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOrderItemRow(int index) {
+    final draft = _orderDrafts[index];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                alignment: Alignment.center,
+                child: Text('${index + 1}',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.primary)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  draft.manual
+                      ? (draft.nameCtrl.text.trim().isEmpty
+                          ? 'New item (type name below)'
+                          : draft.nameCtrl.text.trim())
+                      : draft.itemId == null
+                          ? 'Select item'
+                          : (_itemFor(draft.itemId)?.name ?? 'Item'),
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              GestureDetector(
+                onTap: () => _removeOrderDraft(index),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: AppTheme.danger.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.close,
+                      size: 14, color: AppTheme.danger),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: false, label: Text('Catalog Item')),
+              ButtonSegment(value: true, label: Text('New Item')),
+            ],
+            selected: {draft.manual},
+            onSelectionChanged: (s) => setState(() => draft.manual = s.first),
+            style: SegmentedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              textStyle: const TextStyle(fontSize: 11),
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (draft.manual)
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    controller: draft.nameCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'New Item Name',
+                      hintText: 'e.g., TMT Steel Bar 16mm',
+                      isDense: true,
+                      prefixIcon:
+                          const Icon(Icons.edit_outlined, size: 18),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: draft.uomCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'UoM',
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.straighten, size: 18),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          else
+            DropdownButtonFormField<String>(
+              initialValue: draft.itemId,
+              isExpanded: true,
+              hint: const Text('Item', style: TextStyle(fontSize: 13)),
+              decoration: InputDecoration(
+                isDense: true,
+                prefixIcon: const Icon(Icons.category_outlined, size: 18),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              items: _items
+                  .map((i) => DropdownMenuItem(
+                      value: i.id,
+                      child: Text('${i.name} (${i.uom})',
+                          overflow: TextOverflow.ellipsis)))
+                  .toList(),
+              onChanged: (v) => setState(() => draft.itemId = v),
+            ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: draft.qtyCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: 'Quantity',
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.numbers_outlined, size: 18),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: draft.batchCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Batch (optional)',
+                    hintText: 'auto if empty',
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.qr_code_2, size: 18),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1321,21 +1554,45 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
 
   // ── Tab 4: Orders ─────────────────────────────────────────────
 
+  /// Opens the GIN reconciliation table for this exact order so HOD sees
+  /// every item line, the supervisor's ACTIONS and can approve / reject.
+  Future<void> _openOrderGin(StockOrderGroup group) async {
+    final bill = await GinRepository().fetchBillByOrderNo(group.orderNo);
+    if (!mounted) return;
+    if (bill == null) {
+      _snack('No GIN bill found for ${group.orderNo} yet', AppTheme.warning);
+      return;
+    }
+    final updated = await Navigator.push<GinBill?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GinBillDetailsScreen(
+          bill: bill,
+          mode: GinReviewMode.hod,
+          repo: GinRepository(),
+          onChanged: (_) {},
+        ),
+      ),
+    );
+    if (updated != null && mounted) _load();
+  }
+
   Widget _buildOrders() {
     if (_orders.isEmpty) {
       return _emptyView('No orders placed yet. Place one from the '
           'Place Order tab — the supervisor receives it and it flows '
           'through GIN approval.');
     }
+    final groups = StockOrderGroup.groupOrders(_orders);
     return ListView.separated(
       padding: const EdgeInsets.all(16),
-      itemCount: _orders.length,
+      itemCount: groups.length,
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
-        final o = _orders[i];
+        final group = groups[i];
         final Color color;
         final String status;
-        switch (o.status) {
+        switch (group.status) {
           case 'received':
             color = AppTheme.info;
             status = 'Received — in GIN review';
@@ -1365,7 +1622,7 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
               Row(
                 children: [
                   Expanded(
-                    child: Text(o.orderNo,
+                    child: Text(group.orderNo,
                         style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w800,
@@ -1386,42 +1643,93 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              Text(o.itemName,
+              const SizedBox(height: 8),
+              Text('${group.itemCount} item(s) · '
+                  '${_qty(group.totalQuantity)} total',
                   style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: AppTheme.textPrimary)),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  Text('Batch ${o.batch}',
-                      style: const TextStyle(
-                          fontSize: 12, color: AppTheme.textSecondary)),
-                  const Spacer(),
-                  Text('${_qty(o.quantity)} ${o.unit}',
-                      style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                          color: AppTheme.primary)),
-                ],
-              ),
+                      fontSize: 11.5, color: AppTheme.textSecondary)),
+              const SizedBox(height: 8),
+              for (final item in group.items)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 5),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.circle,
+                          size: 7, color: AppTheme.textMuted),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(item.itemName,
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.textPrimary)),
+                      ),
+                      const SizedBox(width: 8),
+                      Text('${_qty(item.quantity)} ${item.unit}',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: AppTheme.primary)),
+                    ],
+                  ),
+                ),
               const SizedBox(height: 4),
-              Text(o.stockPointName,
+              Text(group.stockPointName,
                   style:
                       const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-              if ((o.notes ?? '').isNotEmpty) ...[
+              if ((group.items.first.notes ?? '').isNotEmpty) ...[
                 const SizedBox(height: 4),
-                Text(o.notes!,
+                Text(group.items.first.notes!,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         fontSize: 11.5, color: AppTheme.textHint)),
+              ],
+              if (group.status == 'received' ||
+                  group.status == 'added_to_stock') ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _openOrderGin(group),
+                    icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                    label: Text(
+                        group.status == 'received'
+                            ? 'View GIN — approve / reject'
+                            : 'View GIN table & actions',
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w700)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
               ],
             ],
           ),
         );
       },
     );
+  }
+}
+
+/// One line of the HOD multi-item order form. Supports picking an existing
+/// catalog item OR typing a brand-new item manually (server creates it).
+class _HodOrderItemDraft {
+  String? itemId;
+  bool manual = false;
+  final TextEditingController nameCtrl = TextEditingController();
+  final TextEditingController uomCtrl = TextEditingController(text: 'units');
+  final TextEditingController qtyCtrl = TextEditingController();
+  final TextEditingController batchCtrl = TextEditingController();
+
+  void dispose() {
+    nameCtrl.dispose();
+    uomCtrl.dispose();
+    qtyCtrl.dispose();
+    batchCtrl.dispose();
   }
 }

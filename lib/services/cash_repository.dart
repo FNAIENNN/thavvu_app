@@ -263,6 +263,7 @@ class CashTransactionRecord {
   final String status;
   final bool isDemo;
   final String? hodNote;
+  final String? createdBy;
   final DateTime? createdAt;
 
   const CashTransactionRecord({
@@ -278,6 +279,7 @@ class CashTransactionRecord {
     this.status = 'submitted',
     this.isDemo = false,
     this.hodNote,
+    this.createdBy,
     this.createdAt,
   });
 
@@ -295,6 +297,7 @@ class CashTransactionRecord {
       status: CashRepository._string(json, 'status', fallback: 'submitted'),
       isDemo: json['is_demo'] == true,
       hodNote: json['hod_note'] as String?,
+      createdBy: json['created_by'] as String?,
       createdAt: DateTime.tryParse(CashRepository._string(json, 'created_at')),
     );
   }

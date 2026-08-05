@@ -30,6 +30,71 @@ class StockInventoryRepository {
         .toList();
   }
 
+  /// All catalog items including soft-deleted (inactive) ones — used by the
+  /// Manage Items screen so deleted items can be restored or seen.
+  Future<List<StockInventoryItem>> fetchAllItems() async {
+    final response = await _client
+        .from(itemsTable)
+        .select()
+        .order('name', ascending: true);
+    return (response as List)
+        .map((row) => StockInventoryItem.fromJson(_asMap(row)))
+        .toList();
+  }
+
+  /// Adds a new catalog item (permanent). `stock_items.id` is TEXT in the
+  /// live schema, so the id is generated here.
+  Future<bool> addStockItem({
+    required String name,
+    required String uom,
+    String? code,
+    String? category,
+    String? groupName,
+  }) async {
+    try {
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) return false;
+      final generatedCode = (code == null || code.trim().isEmpty)
+          ? 'ITEM-${DateTime.now().millisecondsSinceEpoch}'
+          : code.trim();
+      await _client.from(itemsTable).insert({
+        'id': 'ITEM-${DateTime.now().millisecondsSinceEpoch}',
+        'code': generatedCode,
+        'item_code': generatedCode,
+        'name': trimmed,
+        'item_name': trimmed,
+        'group_name': groupName ?? 'General',
+        'category': category ?? 'General',
+        'uom': uom.trim().isEmpty ? 'units' : uom.trim(),
+        'primary_uom': uom.trim().isEmpty ? 'units' : uom.trim(),
+        'batch_required': true,
+        'is_active': true,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('addStockItem failed: $e');
+      return false;
+    }
+  }
+
+  /// Soft-delete / restore a catalog item (is_active=false hides it from
+  /// every dropdown and list; history is preserved).
+  Future<bool> setStockItemActive(String itemId, bool active) async {
+    try {
+      await _client
+          .from(itemsTable)
+          .update({'is_active': active,
+                   'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', itemId);
+      return true;
+    } catch (e) {
+      debugPrint('setStockItemActive failed: $e');
+      return false;
+    }
+  }
+
   Future<List<StockBatchBalance>> fetchBatchBalances() async {
     final response = await _client
         .from(batchesTable)
@@ -230,7 +295,49 @@ class StockInventoryRepository {
         .toList();
   }
 
-  /// HOD places an order for a stock item.
+  /// HOD places ONE order with MULTIPLE items at once. Every line becomes a
+  /// stock_orders row sharing the same order_no (an order group), inserted
+  /// atomically through the `stock_place_multi_order` RPC.
+  Future<bool> placeMultiOrder({
+    required String orderNo,
+    required String? siteId,
+    required String stockPointId,
+    required String stockPointName,
+    String? thavvuPointId,
+    required List<StockOrderItemDraft> items,
+    String? notes,
+  }) async {
+    try {
+      final result = await _client.rpc('stock_place_multi_order', params: {
+        'p_order_no': orderNo,
+        'p_site_id': siteId,
+        'p_stock_point_id': stockPointId,
+        'p_stock_point_name': stockPointName,
+        'p_thavvu_point_id': thavvuPointId,
+        'p_notes': notes,
+        'p_items': [
+          for (final item in items)
+            {
+              if (item.itemId != null && item.itemId!.isNotEmpty)
+                'item_id': item.itemId,
+              'item_name': item.itemName,
+              'item_code': item.itemCode,
+              'batch': item.batch,
+              'quantity': item.quantity,
+              'unit': item.unit,
+              'notes': item.notes,
+            },
+        ],
+      });
+      return _asMap(result)['ok'] == true;
+    } catch (e) {
+      debugPrint('placeMultiOrder failed: $e');
+      return false;
+    }
+  }
+
+  /// HOD places an order for a stock item (single-line convenience wrapper,
+  /// kept for existing callers — new UI uses [placeMultiOrder]).
   Future<bool> placeOrder({
     required String orderNo,
     required String? siteId,
@@ -266,6 +373,60 @@ class StockInventoryRepository {
     } catch (e) {
       debugPrint('Error placing stock order: $e');
       return false;
+    }
+  }
+
+  /// Supervisor receives a placed order group: the RPC creates ONE
+  /// multi-item GIN bill from every line of the order and marks the order
+  /// rows 'received'. Returns the created bill's id + gin_no (or null).
+  Future<Map<String, String>?> receiveOrderToGin(String orderNo) async {
+    try {
+      final result = await _client
+          .rpc('gin_create_from_order', params: {'p_order_no': orderNo});
+      final map = _asMap(result);
+      if (map['ok'] != true) return null;
+      return {
+        'id': map['id']?.toString() ?? '',
+        'gin_no': map['gin_no']?.toString() ?? '',
+      };
+    } catch (e) {
+      debugPrint('receiveOrderToGin failed: $e');
+      return null;
+    }
+  }
+
+  /// Manual stock entry: adds stock at a Thavvu Point (creates the item if
+  /// needed, upserts the batch balance, writes a 'manual_in' movement).
+  /// Returns the created balance details or null on failure.
+  Future<Map<String, dynamic>?> manualStockEntry({
+    required String itemName,
+    required double quantity,
+    required String thavvuPointId,
+    required String thavvuPointName,
+    String uom = 'units',
+    String? batch,
+    String? note,
+    String? itemCode,
+    String? siteId,
+  }) async {
+    try {
+      final result = await _client.rpc('stock_manual_entry', params: {
+        'p_item_name': itemName,
+        'p_quantity': quantity,
+        'p_thavvu_point_id': thavvuPointId,
+        'p_thavvu_point_name': thavvuPointName,
+        'p_uom': uom,
+        'p_batch': batch,
+        'p_note': note,
+        'p_item_code': itemCode,
+        'p_site_id': siteId,
+      });
+      final map = _asMap(result);
+      if (map['ok'] != true) return null;
+      return map;
+    } catch (e) {
+      debugPrint('manualStockEntry failed: $e');
+      return null;
     }
   }
 
@@ -823,6 +984,7 @@ class StockInventoryItem {
   final String brand;
   final bool batchRequired;
   final double reorderLevel;
+  final bool isActive;
 
   const StockInventoryItem({
     required this.id,
@@ -834,6 +996,7 @@ class StockInventoryItem {
     required this.brand,
     required this.batchRequired,
     this.reorderLevel = 0,
+    this.isActive = true,
   });
 
   factory StockInventoryItem.fromJson(Map<String, dynamic> json) {
@@ -842,6 +1005,7 @@ class StockInventoryItem {
       code: _string(json, 'code', fallback: _string(json, 'item_code')),
       name: _string(json, 'name', fallback: _string(json, 'item_name')),
       group: _string(json, 'group_name', fallback: _string(json, 'group')),
+      isActive: json['is_active'] as bool? ?? true,
       category: _string(json, 'category'),
       uom: _string(json, 'uom', fallback: _string(json, 'primary_uom')),
       brand: _string(json, 'brand'),
@@ -922,12 +1086,101 @@ class StockBatchBalance {
 }
 
 /// An order placed by HOD that the supervisor receives and reviews.
+class StockOrderItemDraft {
+  /// Null for a manually typed item — the server creates it on placement.
+  final String? itemId;
+  final String itemName;
+  final String unit;
+  final String? itemCode;
+  final String? batch;
+  final double quantity;
+  final String? notes;
+
+  const StockOrderItemDraft({
+    this.itemId,
+    required this.itemName,
+    required this.unit,
+    this.itemCode,
+    this.batch,
+    required this.quantity,
+    this.notes,
+  });
+}
+
+/// One order placed by HOD = a group of stock_orders rows sharing the same
+/// order_no (multi-item orders). Status is derived from the group lines.
+class StockOrderGroup {
+  final String orderNo;
+  final String? siteId;
+  final String stockPointId;
+  final String stockPointName;
+  final String? thavvuPointId;
+  final String? placedBy;
+  final DateTime? createdAt;
+  final List<StockOrder> items;
+
+  const StockOrderGroup({
+    required this.orderNo,
+    this.siteId,
+    required this.stockPointId,
+    required this.stockPointName,
+    this.thavvuPointId,
+    this.placedBy,
+    this.createdAt,
+    required this.items,
+  });
+
+  int get itemCount => items.length;
+  double get totalQuantity =>
+      items.fold(0, (sum, o) => sum + o.quantity);
+
+  /// placed | received | added_to_stock | cancelled — derived from lines.
+  String get status {
+    if (items.isEmpty) return 'placed';
+    if (items.every((o) => o.status == 'cancelled')) return 'cancelled';
+    if (items.every((o) =>
+        o.status == 'added_to_stock' || o.status == 'cancelled')) {
+      return items.every((o) => o.status == 'added_to_stock')
+          ? 'added_to_stock'
+          : 'placed';
+    }
+    if (items.any((o) => o.status == 'placed')) return 'placed';
+    return 'received';
+  }
+
+  bool get canReceive => status == 'placed';
+
+  static List<StockOrderGroup> groupOrders(List<StockOrder> orders) {
+    final byNo = <String, List<StockOrder>>{};
+    for (final order in orders) {
+      byNo.putIfAbsent(order.orderNo, () => []).add(order);
+    }
+    final groups = byNo.entries.map((e) {
+      final first = e.value.first;
+      return StockOrderGroup(
+        orderNo: e.key,
+        siteId: first.siteId,
+        stockPointId: first.stockPointId,
+        stockPointName: first.stockPointName,
+        thavvuPointId: first.thavvuPointId,
+        placedBy: first.placedBy,
+        createdAt: first.createdAt,
+        items: e.value,
+      );
+    }).toList();
+    groups.sort((a, b) => (b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+        .compareTo(a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)));
+    return groups;
+  }
+}
+
 class StockOrder {
   final String id;
   final String orderNo;
   final String? siteId;
   final String stockPointId;
   final String stockPointName;
+  final String? thavvuPointId;
   final String itemId;
   final String itemName;
   final String batch;
@@ -944,6 +1197,7 @@ class StockOrder {
     this.siteId,
     required this.stockPointId,
     required this.stockPointName,
+    this.thavvuPointId,
     required this.itemId,
     required this.itemName,
     required this.batch,
@@ -962,6 +1216,7 @@ class StockOrder {
       siteId: json['site_id']?.toString(),
       stockPointId: _string(json, 'stock_point_id'),
       stockPointName: _string(json, 'stock_point_name'),
+      thavvuPointId: json['thavvu_point_id']?.toString(),
       itemId: _string(json, 'item_id'),
       itemName: _string(json, 'item_name'),
       batch: _string(json, 'batch'),

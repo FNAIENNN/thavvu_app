@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/auth_service.dart';
 import '../login_screen.dart';
 import '../hod_module_review_screen.dart';
+import '../registry/registry_hub_screen.dart';
 import 'hod_alerts_screen.dart';
 import 'hod_read_only_overview_screen.dart';
 import 'hod_sites_screen.dart';
@@ -13,6 +15,8 @@ import 'modules/hod_attendance_screen.dart';
 import 'modules/hod_cash_screen.dart';
 import 'modules/hod_daily_data_screen.dart';
 import 'modules/hod_food_screen.dart';
+import 'modules/hod_gin_approvals_screen.dart';
+import 'modules/hod_registration_approvals_screen.dart';
 import 'modules/hod_maps_screen.dart';
 import 'modules/hod_machines_entry_screen.dart';
 import 'modules/hod_rental_screen.dart';
@@ -99,8 +103,39 @@ class _HodMainShellState extends State<HodMainShell>
 
   Future<void> _loadUserData() async {
     final data = await AuthService.getUserData();
+    var merged = Map<String, String>.from(data);
+    // Overlay the REAL profile (session user) so the HOD workspace shows the
+    // logged-in account's credentials, not demo defaults.
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null) {
+        final rows = await Supabase.instance.client
+            .from('profiles')
+            .select('emp_id, full_name, email, phone, role')
+            .eq('id', user.id)
+            .limit(1);
+        if (rows.isNotEmpty) {
+          final p = Map<String, dynamic>.from(rows.first);
+          merged = {
+            ...data,
+            if (p['full_name']?.toString().trim().isNotEmpty ?? false)
+              'name': p['full_name']!.toString(),
+            if (p['emp_id']?.toString().trim().isNotEmpty ?? false)
+              'empId': p['emp_id']!.toString(),
+            if (p['email']?.toString().trim().isNotEmpty ?? false)
+              'email': p['email']!.toString(),
+            if (p['phone']?.toString().trim().isNotEmpty ?? false)
+              'phone': p['phone']!.toString(),
+            if (p['role']?.toString().trim().isNotEmpty ?? false)
+              'role': p['role']!.toString(),
+          };
+        }
+      }
+    } catch (_) {
+      // Offline / RLS failure → keep prefs values; demo defaults still apply.
+    }
     if (!mounted) return;
-    setState(() => _userData = data);
+    setState(() => _userData = merged);
   }
 
   @override
@@ -194,6 +229,12 @@ class _HodMainShellState extends State<HodMainShell>
       case '/stock':
         unawaited(_pushScreen(const HodStockInventoryScreen()));
         break;
+      case '/gin-approvals':
+        unawaited(_pushScreen(const HodGinApprovalsScreen()));
+        break;
+      case '/registrations':
+        unawaited(_pushScreen(const HodRegistrationApprovalsScreen()));
+        break;
       case '/suppliers':
         unawaited(_pushScreen(const HodSuppliersScreen()));
         break;
@@ -214,6 +255,9 @@ class _HodMainShellState extends State<HodMainShell>
         break;
       case '/transfers':
         unawaited(_pushScreen(const HodTransfersScreen()));
+        break;
+      case '/registry':
+        unawaited(_pushScreen(const RegistryHubScreen()));
         break;
       case '/internal-transfer':
         unawaited(_pushScreen(const HodInternalTransferScreen()));
@@ -492,7 +536,7 @@ class _HodMainShellState extends State<HodMainShell>
                 const Icon(Icons.verified_user, size: 14, color: Colors.white),
                 const SizedBox(width: 4),
                 Text(
-                  _thavvuIds['hodId'].toString(),
+                  _displayEmpId,
                   style: const TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
@@ -667,7 +711,7 @@ class _HodMainShellState extends State<HodMainShell>
             const SizedBox(height: 20),
             _buildIdCard(
               'HOD ID',
-              _thavvuIds['hodId'].toString(),
+              _displayEmpId,
               Icons.admin_panel_settings,
               const Color(0xFF1976D2),
             ),
@@ -868,10 +912,28 @@ class _HodMainShellState extends State<HodMainShell>
                       const Color(0xFFE6A817),
                     ),
                     _buildDrawerModuleTile(
+                      Icons.fact_check_outlined,
+                      'GIN Approvals',
+                      () => _handleModuleRoute('/gin-approvals'),
+                      const Color(0xFF00897B),
+                    ),
+                    _buildDrawerModuleTile(
+                      Icons.badge_outlined,
+                      'Supervisor Registrations',
+                      () => _handleModuleRoute('/registrations'),
+                      const Color(0xFF6A1B9A),
+                    ),
+                    _buildDrawerModuleTile(
                       Icons.storefront_rounded,
                       'Suppliers',
                       () => _handleModuleRoute('/suppliers'),
                       const Color(0xFF2563EB),
+                    ),
+                    _buildDrawerModuleTile(
+                      Icons.tune_rounded,
+                      'Manage Data',
+                      () => _handleModuleRoute('/registry'),
+                      const Color(0xFF6D4C41),
                     ),
                     _buildDrawerModuleTile(
                       Icons.key_outlined,
@@ -983,7 +1045,7 @@ class _HodMainShellState extends State<HodMainShell>
                     ),
                   ),
                   Text(
-                    _thavvuIds['hodId'].toString(),
+                    _displayEmpId,
                     style: const TextStyle(
                       fontSize: 10,
                       color: Colors.white38,
@@ -1052,7 +1114,7 @@ class _HodMainShellState extends State<HodMainShell>
                       ),
                     ),
                     Text(
-                      _thavvuIds['hodId'].toString(),
+                      _displayEmpId,
                       style: TextStyle(
                         fontSize: 10,
                         color: Colors.white.withOpacity(0.55),
@@ -1502,7 +1564,7 @@ class _HodMainShellState extends State<HodMainShell>
               ),
               const SizedBox(height: 4),
               Text(
-                _thavvuIds['hodId'].toString(),
+                _displayEmpId,
                 style: TextStyle(
                   fontSize: 12,
                   color: Colors.white.withOpacity(0.6),
@@ -1585,7 +1647,7 @@ class _HodMainShellState extends State<HodMainShell>
                   Expanded(
                     child: _profileIdMini(
                       'HOD',
-                      _thavvuIds['hodId'].toString(),
+                      _displayEmpId,
                       const Color(0xFF1976D2),
                     ),
                   ),
