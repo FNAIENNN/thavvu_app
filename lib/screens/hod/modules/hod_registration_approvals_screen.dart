@@ -371,6 +371,8 @@ class _HodRegistrationApprovalsScreenState
     String? siteId = suggested?.id;
     String? siteLabel =
         suggested == null ? null : '${suggested.name} · ${suggested.place}';
+    final passwordCtrl = TextEditingController();
+    bool obscurePass = true;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -411,7 +413,7 @@ class _HodRegistrationApprovalsScreenState
                 const SizedBox(height: 4),
                 Text(
                   '${request.fullName} · ${request.email}\n'
-                  'Their chosen password will work immediately after approval.',
+                  'You will assign the login password — the supervisor signs in with it.',
                   style: const TextStyle(
                       fontSize: 12,
                       height: 1.4,
@@ -470,6 +472,39 @@ class _HodRegistrationApprovalsScreenState
                         fontSize: 11, color: AppTheme.textMuted),
                   ),
                 ],
+                const SizedBox(height: 14),
+                Text(
+                  'Assign Login Password',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textMuted),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: passwordCtrl,
+                  obscureText: obscurePass,
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.lock_outline, size: 18),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        obscurePass
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                        size: 18,
+                      ),
+                      onPressed: () => setSheetState(
+                          () => obscurePass = !obscurePass),
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppTheme.border),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    hintText: 'Minimum 6 characters',
+                  ),
+                ),
                 const SizedBox(height: 18),
                 SizedBox(
                   width: double.infinity,
@@ -477,8 +512,20 @@ class _HodRegistrationApprovalsScreenState
                     onPressed: _acting
                         ? null
                         : () {
+                            if (passwordCtrl.text.trim().length < 6) {
+                              ScaffoldMessenger.of(sheetContext).showSnackBar(
+                                const SnackBar(
+                                  content:
+                                      Text('Assign a password of at least 6 characters'),
+                                  backgroundColor: AppTheme.danger,
+                                ),
+                              );
+                              return;
+                            }
                             Navigator.pop(sheetContext);
-                            _approve(request, siteId: siteId);
+                            _approve(request,
+                                siteId: siteId,
+                                password: passwordCtrl.text.trim());
                           },
                     icon: const Icon(Icons.verified_user_rounded, size: 18),
                     label: Text(
@@ -498,10 +545,11 @@ class _HodRegistrationApprovalsScreenState
     );
   }
 
-  Future<void> _approve(
-      SupervisorRegistration request, {String? siteId}) async {
+  Future<void> _approve(SupervisorRegistration request,
+      {String? siteId, required String password}) async {
     setState(() => _acting = true);
-    final result = await _repo.approve(request.id, siteId: siteId);
+    final result = await _repo.approve(request.id,
+        siteId: siteId, password: password);
     if (!mounted) return;
     setState(() => _acting = false);
     if (result == null || result['status'] != 'approved') {
@@ -511,7 +559,7 @@ class _HodRegistrationApprovalsScreenState
     }
     _showSnack(
       '${request.fullName} approved — '
-      'login: ${result['email']} / emp id ${result['emp_id']}',
+      'login: ${result['email']} / password: $password',
       AppTheme.success,
     );
     _load();

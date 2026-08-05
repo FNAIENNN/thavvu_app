@@ -108,6 +108,7 @@ class SupervisorRegistrationRepository {
   }
 
   /// Submits a new registration request (login screen, anonymous caller).
+  /// No password is collected — the HOD assigns it at approval.
   /// Returns the RPC result map; throws [RegistrationSubmitException] with a
   /// user-friendly message on validation / duplicate errors.
   Future<Map<String, dynamic>> submit({
@@ -116,7 +117,6 @@ class SupervisorRegistrationRepository {
     required String phone,
     required String siteName,
     required String email,
-    required String password,
   }) async {
     try {
       final result = await _client.rpc('submit_supervisor_registration', params: {
@@ -125,7 +125,6 @@ class SupervisorRegistrationRepository {
         'p_phone': phone,
         'p_site_name': siteName,
         'p_email': email,
-        'p_password': password,
       });
       final map = _asMap(result);
       return map;
@@ -140,14 +139,17 @@ class SupervisorRegistrationRepository {
     }
   }
 
-  /// HOD approval. Optionally assigns the supervisor to a site (and its
-  /// first active Thavvu Point). Returns the created account summary.
-  Future<Map<String, dynamic>?> approve(String requestId, {String? siteId}) async {
+  /// HOD approval. Assigns the HOD-chosen password and optionally binds the
+  /// supervisor to a site (and its first active Thavvu Point). Returns the
+  /// created account summary.
+  Future<Map<String, dynamic>?> approve(String requestId,
+      {String? siteId, required String password}) async {
     try {
       final result = await _client.rpc('approve_supervisor_registration',
           params: {
             'p_request_id': requestId,
             'p_site_id': siteId ?? '',
+            'p_password': password,
           });
       return _asMap(result);
     } catch (e) {

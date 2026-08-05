@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../models/hod_site_models.dart';
 import '../../services/hod_alert_service.dart';
@@ -56,9 +57,34 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
     final supervisors = await _workspaceService.supervisors();
     final alerts = await _alertService.alertsForHod('HOD-001');
     final history = await _workspaceService.workHistoryRows();
+
+    // Real supervisor accounts from the backend. RLS restricts this to the
+    // signed-in HOD's own department (profiles.hod_id = auth.uid()).
+    List<_BackendSupervisor> backendSupervisors = const [];
+    try {
+      final rows = await Supabase.instance.client
+          .from('profiles')
+          .select('id, full_name, email, emp_id, phone, is_active')
+          .eq('role', 'supervisor')
+          .order('created_at');
+      backendSupervisors = (rows as List)
+          .map((r) => _BackendSupervisor(
+                id: (r['id'] ?? '').toString(),
+                fullName: (r['full_name'] ?? '').toString(),
+                email: (r['email'] ?? '').toString(),
+                empId: (r['emp_id'] ?? '').toString(),
+                phone: (r['phone'] ?? '').toString(),
+                isActive: r['is_active'] == true,
+              ))
+          .toList();
+    } catch (e) {
+      debugPrint('backendSupervisors load failed: $e');
+    }
+
     return _HodOverviewData(
       sites: sites,
       supervisors: supervisors,
+      backendSupervisors: backendSupervisors,
       alerts: alerts,
       history: history,
     );
@@ -693,7 +719,9 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
               ],
             ),
             const SizedBox(height: 8),
-            if (data.supervisors.isEmpty)
+            if (data.backendSupervisors.isNotEmpty)
+              ...data.backendSupervisors.map(_buildBackendSupervisorCard)
+            else if (data.supervisors.isEmpty)
               const Text(
                 'No supervisors created yet.',
                 style: TextStyle(color: AppTheme.textSecondary),
@@ -779,6 +807,285 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
         ],
       ),
     );
+  }
+
+  Widget _buildBackendSupervisorCard(_BackendSupervisor sup) {
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: sup.isActive
+                  ? AppTheme.info.withValues(alpha: 0.1)
+                  : AppTheme.textSecondary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              sup.isActive
+                  ? Icons.engineering_outlined
+                  : Icons.person_off_outlined,
+              color: sup.isActive ? AppTheme.info : AppTheme.textSecondary,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        sup.fullName,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: sup.isActive
+                            ? AppTheme.successBg
+                            : AppTheme.danger.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        sup.isActive ? 'ACTIVE' : 'DEACTIVATED',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          color: sup.isActive
+                              ? AppTheme.success
+                              : AppTheme.danger,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${sup.empId} • ${sup.email}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Manage supervisor',
+            onSelected: (action) {
+              switch (action) {
+                case 'reset':
+                  _showResetSupervisorPassword(sup);
+                  break;
+                case 'edit':
+                  _showEditSupervisor(sup);
+                  break;
+                case 'toggle':
+                  _confirmToggleSupervisor(sup);
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(
+                value: 'reset',
+                child: Text('Reset Password'),
+              ),
+              const PopupMenuItem(
+                value: 'edit',
+                child: Text('Edit Details'),
+              ),
+              PopupMenuItem(
+                value: 'toggle',
+                child: Text(sup.isActive
+                    ? 'Deactivate Account'
+                    : 'Reactivate Account'),
+              ),
+            ],
+            icon: const Icon(Icons.more_vert, size: 19),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showResetSupervisorPassword(_BackendSupervisor sup) async {
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reset Password'),
+        content: TextField(
+          controller: ctrl,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'New password (min 6 characters)',
+            prefixIcon: Icon(Icons.lock_outline),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final pw = ctrl.text.trim();
+    if (pw.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Password must be at least 6 characters'),
+          backgroundColor: AppTheme.danger));
+      return;
+    }
+    try {
+      await Supabase.instance.client.rpc(
+        'admin_reset_supervisor_password',
+        params: {'p_supervisor_id': sup.id, 'p_new_password': pw},
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Password reset for ${sup.fullName}'),
+          backgroundColor: AppTheme.success));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Reset failed: ${e.toString().replaceAll('Exception: ', '')}'),
+          backgroundColor: AppTheme.danger));
+    }
+  }
+
+  Future<void> _showEditSupervisor(_BackendSupervisor sup) async {
+    final nameCtrl = TextEditingController(text: sup.fullName);
+    final phoneCtrl = TextEditingController(text: sup.phone);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Edit Supervisor'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Full name',
+                prefixIcon: Icon(Icons.person_outline),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Phone number',
+                prefixIcon: Icon(Icons.phone_outlined),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.rpc(
+        'admin_update_supervisor',
+        params: {
+          'p_supervisor_id': sup.id,
+          'p_name': nameCtrl.text.trim(),
+          'p_phone': phoneCtrl.text.trim(),
+        },
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Supervisor updated'),
+          backgroundColor: AppTheme.success));
+      setState(() => _future = _loadData());
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Update failed: ${e.toString().replaceAll('Exception: ', '')}'),
+          backgroundColor: AppTheme.danger));
+    }
+  }
+
+  Future<void> _confirmToggleSupervisor(_BackendSupervisor sup) async {
+    final deactivating = sup.isActive;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(deactivating ? 'Deactivate ${sup.fullName}?' : 'Reactivate ${sup.fullName}?'),
+        content: Text(deactivating
+            ? 'The supervisor will not be able to sign in. Their data stays intact and their point assignments are released.'
+            : 'The supervisor will be able to sign in again.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(deactivating ? 'Deactivate' : 'Reactivate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await Supabase.instance.client.rpc(
+        deactivating ? 'admin_deactivate_supervisor' : 'admin_reactivate_supervisor',
+        params: {'p_supervisor_id': sup.id},
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(deactivating
+              ? '${sup.fullName} deactivated'
+              : '${sup.fullName} reactivated'),
+          backgroundColor: AppTheme.success));
+      setState(() => _future = _loadData());
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Action failed: ${e.toString().replaceAll('Exception: ', '')}'),
+          backgroundColor: AppTheme.danger));
+    }
   }
 
   Widget _buildAlertTile({
@@ -997,14 +1304,37 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
 class _HodOverviewData {
   final List<HodAdminSite> sites;
   final List<HodSupervisorAccount> supervisors;
+  final List<_BackendSupervisor> backendSupervisors;
   final List<HodAlertViewData> alerts;
   final List<HodWorkHistoryRow> history;
 
   const _HodOverviewData({
     this.sites = const [],
     this.supervisors = const [],
+    this.backendSupervisors = const [],
     this.alerts = const [],
     this.history = const [],
+  });
+}
+
+/// A supervisor account managed through the Supabase backend (RLS scoped to
+/// the signed-in HOD's department). Carries the real profiles UUID so the
+/// HOD can reset / deactivate / update the account.
+class _BackendSupervisor {
+  final String id;
+  final String fullName;
+  final String email;
+  final String empId;
+  final String phone;
+  final bool isActive;
+
+  const _BackendSupervisor({
+    required this.id,
+    required this.fullName,
+    required this.email,
+    required this.empId,
+    required this.phone,
+    required this.isActive,
   });
 }
 

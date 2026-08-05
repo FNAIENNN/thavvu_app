@@ -29,6 +29,12 @@ class _LoginScreenState extends State<LoginScreen>
   final _phoneCtrl = TextEditingController();
   final _siteCtrl = TextEditingController();
   final _createPassCtrl = TextEditingController();
+  // HOD self-registration fields (view 3).
+  final _hodNameCtrl = TextEditingController();
+  final _hodEmailCtrl = TextEditingController();
+  final _hodPhoneCtrl = TextEditingController();
+  final _hodPassCtrl = TextEditingController();
+  final _hodConfirmCtrl = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
   bool _rememberMe = false;
@@ -73,6 +79,11 @@ class _LoginScreenState extends State<LoginScreen>
     _phoneCtrl.dispose();
     _siteCtrl.dispose();
     _createPassCtrl.dispose();
+    _hodNameCtrl.dispose();
+    _hodEmailCtrl.dispose();
+    _hodPhoneCtrl.dispose();
+    _hodPassCtrl.dispose();
+    _hodConfirmCtrl.dispose();
     super.dispose();
   }
 
@@ -192,15 +203,14 @@ class _LoginScreenState extends State<LoginScreen>
     setState(() => _isLoading = true);
     try {
       // Registration is a REQUEST, not a sign-up: no auth user is created
-      // until the HOD approves it. The server stores a bcrypt hash of the
-      // chosen password so the approved login works immediately.
+      // until the HOD approves it, and the HOD assigns the login password
+      // at approval time (supervisors log in with HOD-assigned credentials).
       final result = await _regRepo.submit(
         fullName: _nameCtrl.text.trim(),
         empId: _empIdCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
         siteName: _siteCtrl.text.trim(),
         email: _emailController.text.trim(),
-        password: _createPassCtrl.text,
       );
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -211,7 +221,7 @@ class _LoginScreenState extends State<LoginScreen>
       _empIdCtrl.clear();
       _phoneCtrl.clear();
       _siteCtrl.clear();
-      _createPassCtrl.clear();
+      _emailController.clear();
       _switchView(0);
     } on RegistrationSubmitException catch (e) {
       if (!mounted) return;
@@ -225,6 +235,83 @@ class _LoginScreenState extends State<LoginScreen>
         const Color(0xFFE53935),
       );
     }
+  }
+
+  /// Registers a brand-new HOD tenant (own account, own secure password)
+  /// and signs them straight in. Each HOD is isolated to their department.
+  Future<void> _handleHodSignup() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_hodPassCtrl.text != _hodConfirmCtrl.text) {
+      _showSnackbar('Passwords do not match', const Color(0xFFE53935));
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      final client = Supabase.instance.client;
+      await client.rpc('hod_signup', params: {
+        'p_full_name': _hodNameCtrl.text.trim(),
+        'p_email': _hodEmailCtrl.text.trim(),
+        'p_phone': _hodPhoneCtrl.text.trim(),
+        'p_password': _hodPassCtrl.text,
+      });
+      if (!mounted) return;
+
+      // Account created — sign in with the chosen password. The account's
+      // real role is hod, so this routes to the HOD app (approval gate).
+      final realRole = await AuthService.signInWithEmail(
+        email: _hodEmailCtrl.text.trim(),
+        password: _hodPassCtrl.text,
+        role: 'HOD',
+      );
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      if (realRole != 'hod') {
+        await AuthService.signOut();
+        _showSnackbar(
+          'Account created but sign-in failed. Please log in manually.',
+          const Color(0xFFE53935),
+        );
+        return;
+      }
+      _clearHodFields();
+      final destination = HodApprovalScreen(
+        email: _hodEmailCtrl.text.trim(),
+        isDemo: false,
+      );
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => destination,
+          transitionsBuilder: (_, anim, __, child) =>
+              FadeTransition(opacity: anim, child: child),
+          transitionDuration: const Duration(milliseconds: 400),
+        ),
+      );
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnackbar(
+        'Sign-in failed: ${e.message}. Please log in manually.',
+        const Color(0xFFE53935),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      final msg = e.toString().replaceAll('Exception: ', '');
+      _showSnackbar(
+        msg.contains('already exists')
+            ? 'An account already exists with this email. Please sign in.'
+            : 'Registration failed: $msg',
+        const Color(0xFFE53935),
+      );
+    }
+  }
+
+  void _clearHodFields() {
+    _hodNameCtrl.clear();
+    _hodEmailCtrl.clear();
+    _hodPhoneCtrl.clear();
+    _hodPassCtrl.clear();
+    _hodConfirmCtrl.clear();
   }
 
   void _showSnackbar(String message, Color color) {
@@ -386,7 +473,9 @@ class _LoginScreenState extends State<LoginScreen>
                 ? _buildLoginForm()
                 : _currentView == 1
                     ? _buildForgotPasswordForm()
-                    : _buildCreateAccountForm(),
+                    : _currentView == 2
+                        ? _buildCreateAccountForm()
+                        : _buildHodRegisterForm(),
           ),
         ),
       ),
@@ -473,6 +562,11 @@ class _LoginScreenState extends State<LoginScreen>
             icon: Icons.person_add_outlined,
             onTap: () => _switchView(2)),
         const SizedBox(height: 12),
+        _buildSecondaryButton(
+            label: 'Register as HOD',
+            icon: Icons.workspace_premium_outlined,
+            onTap: () => _switchView(3)),
+        const SizedBox(height: 12),
         Center(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -480,7 +574,8 @@ class _LoginScreenState extends State<LoginScreen>
               color: const Color(0xFFFFF8E1),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Text('New accounts require HOD approval',
+            child: const Text(
+                'Supervisors need HOD approval · HODs can self-register',
                 style: TextStyle(
                     fontSize: 10,
                     color: Color(0xFFE6A817),
@@ -684,16 +779,6 @@ class _LoginScreenState extends State<LoginScreen>
             keyboardType: TextInputType.emailAddress,
             validator: (v) =>
                 v == null || !v.contains('@') ? 'Enter a valid email' : null),
-        const SizedBox(height: 14),
-        _buildInputField(
-            controller: _createPassCtrl,
-            label: 'Create Password',
-            hint: 'Minimum 6 characters',
-            icon: Icons.lock_outline,
-            obscure: true,
-            validator: (v) => v == null || v.length < 6
-                ? 'Password must be at least 6 characters'
-                : null),
         const SizedBox(height: 20),
         Container(
           padding: const EdgeInsets.all(14),
@@ -704,11 +789,11 @@ class _LoginScreenState extends State<LoginScreen>
           ),
           child: const Row(
             children: [
-              Icon(Icons.hourglass_bottom, size: 18, color: Color(0xFFE6A817)),
+              Icon(Icons.lock_reset, size: 18, color: Color(0xFFE6A817)),
               SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  "Your account will be active after HOD approval. You'll be notified via SMS/Email.",
+                  "After approval your HOD will assign your login password — you'll be notified via SMS/Email.",
                   style: TextStyle(
                       fontSize: 11, color: Color(0xFF7A5C00), height: 1.4),
                 ),
@@ -721,6 +806,107 @@ class _LoginScreenState extends State<LoginScreen>
             label: 'Submit for Approval',
             icon: Icons.how_to_reg_rounded,
             onTap: _handleCreateAccount),
+      ],
+    );
+  }
+
+  Widget _buildHodRegisterForm() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: () => _switchView(0),
+          child: const Row(
+            children: [
+              Icon(Icons.arrow_back, size: 18, color: Color(0xFF1976D2)),
+              SizedBox(width: 6),
+              Text('Back to login',
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF1976D2),
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        _buildCardHeader('Register as HOD',
+            'Create your department workspace', Icons.workspace_premium_outlined),
+        const SizedBox(height: 24),
+        _buildInputField(
+            controller: _hodNameCtrl,
+            label: 'Full Name',
+            hint: 'Your name',
+            icon: Icons.person_outline,
+            validator: (v) => v == null || v.trim().length < 3
+                ? 'Enter your full name'
+                : null),
+        const SizedBox(height: 14),
+        _buildInputField(
+            controller: _hodEmailCtrl,
+            label: 'Email Address',
+            hint: 'you@company.com',
+            icon: Icons.email_outlined,
+            keyboardType: TextInputType.emailAddress,
+            validator: (v) =>
+                v == null || !v.contains('@') ? 'Enter a valid email' : null),
+        const SizedBox(height: 14),
+        _buildInputField(
+            controller: _hodPhoneCtrl,
+            label: 'Phone Number',
+            hint: '+91 98765 43210',
+            icon: Icons.phone_outlined,
+            keyboardType: TextInputType.phone,
+            validator: (v) {
+              final digits = (v ?? '').replaceAll(RegExp(r'[^0-9+]'), '');
+              return digits.length < 8 ? 'Enter a valid phone number' : null;
+            }),
+        const SizedBox(height: 14),
+        _buildInputField(
+            controller: _hodPassCtrl,
+            label: 'Create Password',
+            hint: 'Minimum 6 characters',
+            icon: Icons.lock_outline,
+            obscure: true,
+            validator: (v) => v == null || v.length < 6
+                ? 'Password must be at least 6 characters'
+                : null),
+        const SizedBox(height: 14),
+        _buildInputField(
+            controller: _hodConfirmCtrl,
+            label: 'Confirm Password',
+            hint: 'Re-enter password',
+            icon: Icons.lock_outline,
+            obscure: true,
+            validator: (v) => v == null || v != _hodPassCtrl.text
+                ? 'Passwords do not match'
+                : null),
+        const SizedBox(height: 20),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF8E1),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFFFCC02).withOpacity(0.5)),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.security_outlined, size: 18, color: Color(0xFFE6A817)),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  "Your account is created instantly. You'll manage your own supervisors, sites and data — fully isolated from other departments.",
+                  style: TextStyle(
+                      fontSize: 11, color: Color(0xFF7A5C00), height: 1.4),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 28),
+        _buildPrimaryButton(
+            label: 'Create HOD Account',
+            icon: Icons.check_circle_outline,
+            onTap: _handleHodSignup),
       ],
     );
   }

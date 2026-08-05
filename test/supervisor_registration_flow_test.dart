@@ -121,8 +121,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(submitCalls, 0);
       expect(find.text('Enter your full name'), findsOneWidget);
-      expect(find.text('Password must be at least 6 characters'),
-          findsOneWidget);
+      expect(find.text('Enter a valid email'), findsOneWidget);
     });
 
     testWidgets('submits the request and returns to login on success',
@@ -151,8 +150,6 @@ void main() {
       await tester.enterText(
           find.widgetWithText(TextFormField, 'Email Address'),
           'mohan.chandra@thavvu.com');
-      await tester.enterText(
-          find.widgetWithText(TextFormField, 'Create Password'), 'Secret123');
       await tester.pump();
 
       await tester.ensureVisible(find.text('Submit for Approval'));
@@ -163,8 +160,9 @@ void main() {
       expect(received!['fullName'], 'Mohan Chandra');
       expect(received!['empId'], 'THV-SUP-010');
       expect(received!['email'], 'mohan.chandra@thavvu.com');
-      expect(received!['password'], 'Secret123');
       expect(received!['siteName'], 'Site A - Chennai');
+      // No password is collected at request time — the HOD assigns it.
+      expect(received!.containsKey('password'), isFalse);
 
       // Success snackbar + back on the login view.
       expect(find.text('Request submitted for HOD approval.'), findsOneWidget);
@@ -192,8 +190,6 @@ void main() {
       await tester.enterText(
           find.widgetWithText(TextFormField, 'Email Address'),
           'mohan.chandra@thavvu.com');
-      await tester.enterText(
-          find.widgetWithText(TextFormField, 'Create Password'), 'Secret123');
       await tester.pump();
 
       await tester.ensureVisible(find.text('Submit for Approval'));
@@ -222,7 +218,6 @@ class _FakeRegistrationRepository implements SupervisorRegistrationRepository {
     required String phone,
     required String siteName,
     required String email,
-    required String password,
   }) {
     return onSubmit({
       'fullName': fullName,
@@ -230,7 +225,6 @@ class _FakeRegistrationRepository implements SupervisorRegistrationRepository {
       'phone': phone,
       'siteName': siteName,
       'email': email,
-      'password': password,
     });
   }
 
@@ -240,7 +234,8 @@ class _FakeRegistrationRepository implements SupervisorRegistrationRepository {
   }
 
   @override
-  Future<Map<String, dynamic>?> approve(String requestId, {String? siteId}) {
+  Future<Map<String, dynamic>?> approve(String requestId,
+      {String? siteId, required String password}) {
     throw UnimplementedError();
   }
 
