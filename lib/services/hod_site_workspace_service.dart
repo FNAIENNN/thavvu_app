@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/hod_site_models.dart';
 import 'auth_service.dart';
@@ -264,12 +265,26 @@ class HodSiteWorkspaceService {
     return null;
   }
 
+  /// True when the Supabase singleton has been initialized (production).
+  /// Widget tests and early startup leave it uninitialized; callers then
+  /// fall back to local-only behaviour instead of crashing.
+  bool _supabaseReady() {
+    try {
+      Supabase.instance;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<HodSupervisorAccount> createSupervisor({
     required String name,
     required String email,
     required String phone,
     required String password,
     String createdByHodId = 'HOD-001',
+    String? siteId,
+    String? pointId,
   }) async {
     await _ensureLoaded();
     final cleanName = name.trim();
@@ -296,8 +311,42 @@ class HodSiteWorkspaceService {
       throw StateError('A supervisor already exists with this email.');
     }
 
+    // ── REAL account provisioning (workflow fix) ────────────────────────
+    // The created credentials must work on the actual login screen, which
+    // authenticates against Supabase Auth. When Supabase is available we
+    // create a real, email-confirmed auth user (+ identity + profile + the
+    // optional site/point assignment) via the admin_create_supervisor RPC.
+    // Only when Supabase is unavailable (widget tests, early startup) do we
+    // fall back to the old local-only record so previews/tests keep working.
+    String empId = 'THV-SUP-${(_supervisors.length + 1).toString().padLeft(3, '0')}';
+    if (_supabaseReady()) {
+      try {
+        final response = await Supabase.instance.client
+            .rpc('admin_create_supervisor', params: {
+          'p_name': cleanName,
+          'p_email': cleanEmail,
+          'p_phone': cleanPhone,
+          'p_password': cleanPassword,
+          'p_site_id': siteId,
+          'p_point_id': pointId,
+        });
+        final map = Map<String, dynamic>.from(response as Map);
+        final createdEmpId = map['emp_id']?.toString().trim();
+        if (createdEmpId != null && createdEmpId.isNotEmpty) {
+          empId = createdEmpId;
+        }
+      } catch (e) {
+        // Never silently create a phantom account: surface the real error
+        // so the HOD knows the login was NOT provisioned.
+        throw StateError(
+          'Could not create the Supabase login. '
+          '${e.toString().replaceAll('Exception: ', '')}',
+        );
+      }
+    }
+
     final supervisor = HodSupervisorAccount(
-      id: 'THV-SUP-${(_supervisors.length + 1).toString().padLeft(3, '0')}',
+      id: empId,
       name: cleanName,
       email: cleanEmail,
       phone: cleanPhone,

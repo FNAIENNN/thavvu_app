@@ -419,7 +419,11 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       builder: (sheetContext) {
-        return SafeArea(
+        HodAdminSite? selectedSite;
+        HodThavvuPoint? selectedPoint;
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SafeArea(
           child: SingleChildScrollView(
             padding: EdgeInsets.fromLTRB(
               18,
@@ -527,6 +531,84 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
                             : null,
                   ),
                   const SizedBox(height: 18),
+                  FutureBuilder<List<HodAdminSite>>(
+                    future: _workspaceService.adminCreatedSites(),
+                    builder: (context, snapshot) {
+                      final sites = snapshot.data ?? const <HodAdminSite>[];
+                      return InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Assign to Site (optional)',
+                          prefixIcon: Icon(Icons.location_city_outlined),
+                          border: OutlineInputBorder(),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<HodAdminSite?>(
+                            value: selectedSite,
+                            isExpanded: true,
+                            isDense: true,
+                            hint: const Text('Assign later from HOD Sites'),
+                            items: [
+                              const DropdownMenuItem<HodAdminSite?>(
+                                value: null,
+                                child: Text('Assign later'),
+                              ),
+                              ...sites.map(
+                                (site) => DropdownMenuItem<HodAdminSite?>(
+                                  value: site,
+                                  child: Text('${site.name} — ${site.place}'),
+                                ),
+                              ),
+                            ],
+                            onChanged: (site) => setSheetState(() {
+                              selectedSite = site;
+                              selectedPoint = null;
+                            }),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  if (selectedSite != null)
+                    FutureBuilder<List<HodThavvuPoint>>(
+                      future: _workspaceService
+                          .thavvuPointsForSite(selectedSite!.id),
+                      builder: (context, snapshot) {
+                        final points =
+                            snapshot.data ?? const <HodThavvuPoint>[];
+                        return InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Assign to Thavvu Point (optional)',
+                            prefixIcon: Icon(Icons.place_outlined),
+                            border: OutlineInputBorder(),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<HodThavvuPoint?>(
+                              value: selectedPoint,
+                              isExpanded: true,
+                              isDense: true,
+                              hint: const Text('Choose a point'),
+                              items: [
+                                const DropdownMenuItem<HodThavvuPoint?>(
+                                  value: null,
+                                  child: Text('Assign later'),
+                                ),
+                                ...points.map(
+                                  (point) => DropdownMenuItem<HodThavvuPoint?>(
+                                    value: point,
+                                    child: Text(point.pointName),
+                                  ),
+                                ),
+                              ],
+                              onChanged: (point) => setSheetState(() {
+                                selectedPoint = point;
+                              }),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  const SizedBox(height: 18),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -541,6 +623,8 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
                             email: emailController.text,
                             phone: phoneController.text,
                             password: passwordController.text,
+                            siteId: selectedSite?.id,
+                            pointId: selectedPoint?.id,
                           );
                           if (!mounted || !sheetContext.mounted) return;
                           Navigator.of(sheetContext).pop();
@@ -575,6 +659,8 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
               ),
             ),
           ),
+        );
+          },
         );
       },
     );

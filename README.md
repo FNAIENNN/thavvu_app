@@ -566,6 +566,24 @@ still builds but signs with the debug fallback.
 carries ORYXEN wordmark artwork used in-app; decide on final brand art before
 submitting to the App Store (icon + screenshots are required for both stores).
 
+## Supervisor Account Provisioning (HOD → real login)
+
+The HOD "Create Supervisor Login" flow provisions a **real, email-confirmed
+Supabase Auth account** via the `admin_create_supervisor` SECURITY DEFINER RPC
+(migration `00034_admin_create_supervisor.sql`). The generated credentials
+therefore work on the actual login screen:
+
+- The RPC creates the `auth.users` row (bcrypt password, `email_confirmed_at`
+  set), the `auth.identities` email row, and the `profiles` row (via the
+  existing `on_auth_user_created` trigger).
+- If the HOD picks a **Site** and **Thavvu Point** in the create sheet, the
+  supervisor is immediately assigned (`thavvu_point_assignments` +
+  `site_memberships`) so they can start real work in realtime.
+- Only authenticated HOD accounts may call it (checked inside the function).
+- When Supabase is unavailable (widget tests), `HodSiteWorkspaceService`
+  falls back to the old local-only record; in production a failed RPC raises
+  a clear error instead of creating a phantom account.
+
 ## Notes About Existing Scripts
 
 Several shell scripts exist in the root, such as:
