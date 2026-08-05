@@ -205,7 +205,27 @@ class HodSiteWorkspaceService {
     );
   }
 
+  /// Real Supabase `profiles.id` UUIDs for supervisors, keyed by emp_id.
+  /// Populated by [supervisors] when the backend is available; used to feed
+  /// UUID-typed RPC params in [createThavvuPoint].
+  final Map<String, String> _supervisorUuidByEmpId = {};
+
+  /// Sites from the live backend (source of truth for a signed-in HOD),
+  /// falling back to the local mirror only when Supabase is unavailable.
   Future<List<HodAdminSite>> adminCreatedSites() async {
+    if (_supabaseReady()) {
+      try {
+        final rows = await Supabase.instance.client
+            .from('sites')
+            .select('*, thavvu_points(count)')
+            .order('created_at', ascending: false);
+        return rows
+            .map((row) => HodAdminSite.fromDb(row))
+            .toList(growable: false);
+      } catch (_) {
+        // Offline / dev — fall through to the local mirror below.
+      }
+    }
     await _ensureLoaded();
     return _adminSites
         .map((site) => site.copyWith(
@@ -215,12 +235,53 @@ class HodSiteWorkspaceService {
         .toList(growable: false);
   }
 
+  /// Supervisors from the live backend (tenant-scoped by RLS on profiles),
+  /// falling back to the local demo list only when Supabase is unavailable.
   Future<List<HodSupervisorAccount>> supervisors() async {
+    if (_supabaseReady()) {
+      try {
+        final rows = await Supabase.instance.client
+            .from('profiles')
+            .select(
+                'id, emp_id, full_name, email, phone, is_active, created_at')
+            .eq('role', 'supervisor')
+            .order('created_at', ascending: false);
+        final supervisors =
+            rows.map((row) => HodSupervisorAccount.fromDb(row)).toList();
+        _supervisorUuidByEmpId.clear();
+        for (final supervisor in supervisors) {
+          if (supervisor.uuid.isNotEmpty && supervisor.id.isNotEmpty) {
+            _supervisorUuidByEmpId[supervisor.id] = supervisor.uuid;
+          }
+        }
+        return supervisors;
+      } catch (_) {
+        // Offline / dev — fall through to the local mirror below.
+      }
+    }
     await _ensureLoaded();
     return List<HodSupervisorAccount>.unmodifiable(_supervisors);
   }
 
+  /// Thavvu Points for a site from the live backend (with the active
+  /// assignment's supervisor and the owning site name embedded), falling
+  /// back to the local mirror only when Supabase is unavailable.
   Future<List<HodThavvuPoint>> thavvuPointsForSite(String siteId) async {
+    if (_supabaseReady()) {
+      try {
+        final rows = await Supabase.instance.client
+            .from('thavvu_points')
+            .select(
+                '*, sites(name), thavvu_point_assignments!thavvu_point_assignments_thavvu_point_id_fkey(supervisor_id, is_active, profiles!thavvu_point_assignments_supervisor_id_fkey(full_name))')
+            .eq('site_id', siteId)
+            .order('created_at', ascending: true);
+        return rows
+            .map((row) => HodThavvuPoint.fromDb(row))
+            .toList(growable: false);
+      } catch (_) {
+        // Offline / dev — fall through to the local mirror below.
+      }
+    }
     await _ensureLoaded();
     return _points
         .where((point) => point.siteId == siteId)
@@ -389,13 +450,43 @@ class HodSiteWorkspaceService {
       throw StateError('This site already exists.');
     }
 
+    // ── REAL backend insert (enterprise) ────────────────────────────────
+    // Creates a live `sites` row inside the caller's tenant via the
+    // tenant-scoped admin_create_site RPC. RPC errors are rethrown so the
+    // app never silently creates a phantom local-only site. When Supabase
+    // is unavailable (widget tests, offline demo) we fall back to the old
+    // local-only record so previews/tests keep working.
+    String siteId = '';
+    if (_supabaseReady()) {
+      try {
+        final response = await Supabase.instance.client.rpc(
+          'admin_create_site',
+          params: {
+            'p_name': cleanName,
+            'p_place': cleanPlace,
+            'p_admin_name': cleanAdminName,
+            'p_acres': acres,
+          },
+        );
+        final map = Map<String, dynamic>.from(response as Map);
+        siteId = map['id']?.toString() ?? '';
+      } catch (e) {
+        throw StateError(
+          'Could not create the site. '
+          '${e.toString().replaceAll('Exception: ', '')}',
+        );
+      }
+    }
+
     final prefix = cleanPlace
         .replaceAll(RegExp(r'[^A-Za-z]'), '')
         .toUpperCase()
         .padRight(3, 'X')
         .substring(0, 3);
     final site = HodAdminSite(
-      id: 'SITE-$prefix-${(_adminSites.length + 1).toString().padLeft(3, '0')}',
+      id: siteId.isNotEmpty
+          ? siteId
+          : 'SITE-$prefix-${(_adminSites.length + 1).toString().padLeft(3, '0')}',
       name: cleanName,
       place: cleanPlace,
       adminName: cleanAdminName,
@@ -447,13 +538,51 @@ class HodSiteWorkspaceService {
           'This Thavvu Point already exists for the selected site.');
     }
 
+    // ── REAL backend insert (enterprise) ────────────────────────────────
+    // Creates a live `thavvu_points` row + active assignment + site
+    // membership inside the caller's tenant via the tenant-scoped
+    // admin_create_thavvu_point RPC. The supervisor must be resolved to
+    // their real `profiles.id` UUID first. RPC errors are rethrown so no
+    // phantom local-only point is created. When Supabase is unavailable
+    // (widget tests, offline demo) we fall back to local-only behaviour.
+    String pointId = '';
+    if (_supabaseReady()) {
+      final supervisorUuid = await _resolveSupervisorUuid(supervisorId);
+      if (supervisorUuid == null) {
+        throw StateError(
+          'Supervisor profile not found in the backend. '
+          'Create the supervisor login first.',
+        );
+      }
+      try {
+        final response = await Supabase.instance.client.rpc(
+          'admin_create_thavvu_point',
+          params: {
+            'p_site_id': site.id,
+            'p_point_name': cleanPointName,
+            'p_assigned_acres': assignedAcres,
+            'p_supervisor_id': supervisorUuid,
+          },
+        );
+        final map = Map<String, dynamic>.from(response as Map);
+        pointId = map['id']?.toString() ?? '';
+      } catch (e) {
+        throw StateError(
+          'Could not create the Thavvu Point. '
+          '${e.toString().replaceAll('Exception: ', '')}',
+        );
+      }
+    }
+
     final prefix = site.place
         .replaceAll(RegExp(r'[^A-Za-z]'), '')
         .toUpperCase()
         .padRight(3, 'X')
         .substring(0, 3);
     final point = HodThavvuPoint(
-      id: 'TP-$prefix-${(_points.length + 1).toString().padLeft(3, '0')}',
+      id: pointId.isNotEmpty
+          ? pointId
+          : 'TP-$prefix-${(_points.length + 1).toString().padLeft(3, '0')}',
       siteId: site.id,
       siteName: site.name,
       pointName: cleanPointName,
@@ -468,10 +597,74 @@ class HodSiteWorkspaceService {
     return point;
   }
 
+  /// Resolves [idOrUuid] (a `profiles.id` UUID or a human-readable emp_id
+  /// such as `THV-SUP-001`) to the real `profiles.id` UUID. Checks the
+  /// cached emp_id map first (populated by [supervisors]), then queries
+  /// `profiles` directly. Returns null when the profile cannot be found.
+  Future<String?> _resolveSupervisorUuid(String idOrUuid) async {
+    if (idOrUuid.isEmpty) return null;
+    final uuidPattern = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
+    if (uuidPattern.hasMatch(idOrUuid)) return idOrUuid;
+    final cached = _supervisorUuidByEmpId[idOrUuid];
+    if (cached != null && cached.isNotEmpty) return cached;
+    try {
+      final rows = await Supabase.instance.client
+          .from('profiles')
+          .select('id')
+          .eq('emp_id', idOrUuid)
+          .limit(1);
+      if (rows.isNotEmpty) {
+        final id = rows.first['id'] as String?;
+        if (id != null && id.isNotEmpty) {
+          _supervisorUuidByEmpId[idOrUuid] = id;
+          return id;
+        }
+      }
+    } catch (_) {
+      // Offline — the caller decides how to surface this.
+    }
+    return null;
+  }
+
   Future<HodThavvuPoint> grantThavvuPoint(String pointId) async {
     await _ensureLoaded();
+
+    // ── REAL backend grant (enterprise) ─────────────────────────────────
+    // Flips the live `thavvu_points.status` draft → granted with
+    // granted_at/granted_by via the tenant-scoped admin_grant_thavvu_point
+    // RPC. RPC errors are rethrown so the UI never shows a false success.
+    if (_supabaseReady()) {
+      try {
+        await Supabase.instance.client.rpc(
+          'admin_grant_thavvu_point',
+          params: {'p_point_id': pointId},
+        );
+      } catch (e) {
+        throw StateError(
+          'Could not grant the Thavvu Point. '
+          '${e.toString().replaceAll('Exception: ', '')}',
+        );
+      }
+    }
+
     final index = _points.indexWhere((point) => point.id == pointId);
     if (index == -1) {
+      if (_supabaseReady()) {
+        // Backend-loaded point that has no local mirror row. The backend
+        // grant already succeeded; return a status-carrying value so the
+        // caller's reload (which refetches from Supabase) shows it granted.
+        return HodThavvuPoint(
+          id: pointId,
+          siteId: '',
+          siteName: '',
+          pointName: '',
+          assignedTo: '',
+          status: 'Granted',
+          grantedAt: DateTime.now(),
+        );
+      }
       throw StateError('Thavvu Point not found.');
     }
     final point = _points[index].copyWith(

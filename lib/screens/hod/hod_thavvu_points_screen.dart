@@ -199,37 +199,11 @@ class _HodThavvuPointsScreenState extends State<HodThavvuPointsScreen> {
                               return;
                             }
                             try {
-                              // Supabase is the source of truth for the
-                              // enterprise point graph when a real HOD uid
-                              // exists; otherwise mirror locally so the
-                              // offline demo / widget tests still work.
-                              try {
-                                final supabaseUid = Supabase
-                                    .instance
-                                    .client
-                                    .auth
-                                    .currentUser
-                                    ?.id;
-                                if (supabaseUid != null) {
-                                  final pointId =
-                                      await _assignmentRepo.createPoint(
-                                    siteId: widget.site.id,
-                                    pointName: pointController.text,
-                                    assignedAcres: double.parse(
-                                        acresController.text.trim()),
-                                    createdBy: supabaseUid,
-                                  );
-                                  await _assignmentRepo.grant(
-                                    thavvuPointId: pointId,
-                                    supervisorId: selectedSupervisorId!,
-                                    siteId: widget.site.id,
-                                    assignedBy: supabaseUid,
-                                  );
-                                }
-                              } catch (_) {
-                                // Supabase unavailable (offline / test).
-                                // The local workspace create below still runs.
-                              }
+                              // The service is backend-first: when Supabase
+                              // is available it creates the point + active
+                              // assignment + site membership atomically via
+                              // the tenant-scoped admin_create_thavvu_point
+                              // RPC, then mirrors locally for offline/tests.
                               await _workspaceService.createThavvuPoint(
                                 site: widget.site,
                                 pointName: pointController.text,

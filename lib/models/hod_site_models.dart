@@ -38,6 +38,44 @@ class HodAdminSite {
     );
   }
 
+  /// Maps a live Supabase `sites` row (snake_case columns) to the UI model.
+  ///
+  /// The row may embed `thavvu_points(count)` (PostgREST aggregate) which
+  /// yields `thavvu_points: [{"count": N}]` for the active point count.
+  factory HodAdminSite.fromDb(Map<String, dynamic> row) {
+    int pointCount = 0;
+    final points = row['thavvu_points'];
+    if (points is List && points.isNotEmpty && points.first is Map) {
+      final count = (points.first as Map)['count'];
+      if (count is int) pointCount = count;
+    }
+    return HodAdminSite(
+      id: row['id'] as String,
+      name: row['name'] as String,
+      place: row['place'] as String,
+      adminName: row['admin_name'] as String? ?? 'HOD Admin',
+      acres: (row['acres'] as num?)?.toDouble() ?? 0,
+      status: _displaySiteStatus(row['status'] as String? ?? 'active'),
+      activePointCount: pointCount,
+      createdAt: DateTime.tryParse(row['created_at'] as String? ?? '') ??
+          DateTime.now(),
+      createdByHodId: (row['hod_id'] as String?) ?? 'HOD-001',
+    );
+  }
+
+  static String _displaySiteStatus(String dbStatus) {
+    switch (dbStatus) {
+      case 'active':
+        return 'Ready for HOD planning';
+      case 'inactive':
+        return 'Inactive';
+      case 'archived':
+        return 'Archived';
+      default:
+        return dbStatus;
+    }
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
@@ -133,6 +171,63 @@ class HodThavvuPoint {
     );
   }
 
+  /// Maps a live Supabase `thavvu_points` row (snake_case columns) to the
+  /// UI model.
+  ///
+  /// The row may embed the active assignment with the supervisor profile and
+  /// the owning site name:
+  ///   thavvu_points(site_id, ..., sites(name),
+  ///                 thavvu_point_assignments(supervisor_id, is_active,
+  ///                                          profiles(full_name)))
+  factory HodThavvuPoint.fromDb(
+    Map<String, dynamic> row, {
+    String? siteNameOverride,
+  }) {
+    String supervisorId = '';
+    String supervisorName = 'Unassigned';
+    final assignments = row['thavvu_point_assignments'];
+    if (assignments is List && assignments.isNotEmpty) {
+      Map<String, dynamic>? chosen;
+      for (final a in assignments) {
+        if (a is Map) {
+          chosen = Map<String, dynamic>.from(a);
+          if (a['is_active'] == true) break; // prefer the live assignment
+        }
+      }
+      if (chosen != null) {
+        supervisorId = chosen['supervisor_id'] as String? ?? '';
+        final profile = chosen['profiles'];
+        if (profile is Map) {
+          supervisorName = profile['full_name'] as String? ?? 'Unassigned';
+        }
+      }
+    }
+
+    String siteName = siteNameOverride ?? '';
+    final site = row['sites'];
+    if (site is Map && site['name'] is String) {
+      siteName = site['name'] as String;
+    }
+
+    return HodThavvuPoint(
+      id: row['id'] as String,
+      siteId: row['site_id'] as String,
+      siteName: siteName,
+      pointName: row['point_name'] as String,
+      assignedTo: supervisorName,
+      supervisorId: supervisorId,
+      supervisorName: supervisorName,
+      assignedAcres: (row['assigned_acres'] as num?)?.toDouble() ?? 0,
+      createdAt: DateTime.tryParse(row['created_at'] as String? ?? '') ??
+          DateTime.now(),
+      status: row['status'] as String? ?? 'draft',
+      grantedAt: row['granted_at'] != null
+          ? DateTime.tryParse(row['granted_at'] as String)
+          : null,
+      grantedByHodId: (row['granted_by'] as String?) ?? 'HOD-001',
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'siteId': siteId,
@@ -198,6 +293,9 @@ class HodSupervisorAccount {
   final bool active;
   final DateTime createdAt;
   final String createdByHodId;
+  /// Real Supabase `profiles.id` UUID when loaded from the backend; empty
+  /// for local-only demo accounts. Used to feed UUID-typed RPC params.
+  final String uuid;
 
   HodSupervisorAccount({
     required this.id,
@@ -208,6 +306,7 @@ class HodSupervisorAccount {
     this.active = true,
     DateTime? createdAt,
     this.createdByHodId = 'HOD-001',
+    this.uuid = '',
   }) : createdAt = createdAt ?? DateTime.now();
 
   factory HodSupervisorAccount.fromJson(Map<String, dynamic> json) {
@@ -221,6 +320,24 @@ class HodSupervisorAccount {
       createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
           DateTime.now(),
       createdByHodId: json['createdByHodId'] as String? ?? 'HOD-001',
+      uuid: json['uuid'] as String? ?? '',
+    );
+  }
+
+  /// Maps a live Supabase `profiles` row (snake_case columns) to the UI
+  /// model. `id` stays the human-readable emp_id for display; `uuid` keeps
+  /// the real `profiles.id` for RPC params.
+  factory HodSupervisorAccount.fromDb(Map<String, dynamic> row) {
+    return HodSupervisorAccount(
+      id: row['emp_id'] as String? ?? '',
+      name: row['full_name'] as String? ?? '',
+      email: row['email'] as String? ?? '',
+      phone: row['phone'] as String? ?? '',
+      password: '',
+      active: row['is_active'] as bool? ?? true,
+      createdAt: DateTime.tryParse(row['created_at'] as String? ?? '') ??
+          DateTime.now(),
+      uuid: row['id'] as String? ?? '',
     );
   }
 
