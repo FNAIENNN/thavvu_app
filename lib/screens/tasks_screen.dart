@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import '../services/auth_service.dart';
+import '../services/attendance_context_service.dart';
 import '../services/hod_site_workspace_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/collapsible_tab_scaffold.dart';
@@ -136,6 +139,24 @@ class TaskProofBundle {
     if (hasLocation()) count++;
     if (hasNote()) count++;
     return count;
+  }
+
+  /// Serialises the bundle into the `proof` jsonb column shape.
+  Map<String, dynamic> toJson() {
+    return {
+      'photoPath': photoPath,
+      'videoPath': videoPath,
+      'location': location == null
+          ? null
+          : {
+              'label': location!.label,
+              'latitude': location!.latitude,
+              'longitude': location!.longitude,
+              'capturedAt': location!.capturedAt.toIso8601String(),
+            },
+      'note': note,
+      'updatedAt': updatedAt?.toIso8601String(),
+    };
   }
 
   bool satisfies(TaskProofRequirement requirement) {
@@ -310,11 +331,34 @@ class _TasksScreenState extends State<TasksScreen>
   }
 
   Future<void> _loadTasks() async {
-    final records = await _tasksRepo.fetchSupervisorTasks('SUP-VJA-001');
+    final supervisorId = await _resolveSupervisorId();
+    final records = await _tasksRepo.fetchSupervisorTasks(supervisorId);
     setState(() {
       _tasks.clear();
       _tasks.addAll(records);
     });
+  }
+
+  /// Resolves the signed-in supervisor's employee code from the profiles
+  /// table (authoritative), falling back to the cached session metadata.
+  /// Tasks are assigned to `profiles.emp_id`, so this must match.
+  Future<String> _resolveSupervisorId() async {
+    try {
+      final profile =
+          await AttendanceContextService().fetchProfileForCurrentUser();
+      final empId = profile?['emp_id']?.toString().trim() ?? '';
+      if (empId.isNotEmpty) return empId;
+    } catch (_) {
+      // fall through to cached metadata
+    }
+    try {
+      final user = await AuthService.getUserData();
+      final empId = user['empId']?.trim() ?? '';
+      if (empId.isNotEmpty) return empId;
+    } catch (_) {
+      // fall through to demo default
+    }
+    return 'THV-SUP-001';
   }
 
   List<SupervisorHodTask> get _singleTasks => _tasks
@@ -386,50 +430,67 @@ class _TasksScreenState extends State<TasksScreen>
     );
   }
 
-  void _toggleSingleTaskDone(SupervisorHodTask task) {
-    setState(() {
-      if (task.status == SupervisorTaskStatus.submitted ||
-          task.status == SupervisorTaskStatus.approved) {
-        return;
-      }
-      final currentlyDone = task.status == SupervisorTaskStatus.completed;
-      task.status = currentlyDone
-          ? SupervisorTaskStatus.inProgress
-          : SupervisorTaskStatus.completed;
-    });
+  Future<void> _toggleSingleTaskDone(SupervisorHodTask task) async {
+    if (task.status == SupervisorTaskStatus.submitted ||
+        task.status == SupervisorTaskStatus.approved) {
+      return;
+    }
+    final previous = task.status;
+    final newStatus = task.status == SupervisorTaskStatus.completed
+        ? SupervisorTaskStatus.inProgress
+        : SupervisorTaskStatus.completed;
+    setState(() => task.status = newStatus);
 
+    final ok = await _tasksRepo.updateTaskStatus(task.id, newStatus);
+    if (!ok) {
+      if (mounted) setState(() => task.status = previous);
+      _showSnackbar(
+        'Failed to save task status. Check your connection and retry.',
+        AppTheme.danger,
+      );
+      return;
+    }
     _showSnackbar(
-      task.status == SupervisorTaskStatus.completed
+      newStatus == SupervisorTaskStatus.completed
           ? 'Single task marked as completed.'
           : 'Single task moved back to pending.',
-      task.status == SupervisorTaskStatus.completed
+      newStatus == SupervisorTaskStatus.completed
           ? AppTheme.success
           : AppTheme.warning,
     );
   }
 
-  void _toggleChecklistStep(
+  Future<void> _toggleChecklistStep(
     SupervisorHodTask task,
     SupervisorChecklistStep step,
-  ) {
+  ) async {
     if (task.status == SupervisorTaskStatus.submitted ||
         task.status == SupervisorTaskStatus.approved) {
       _showSnackbar('Submitted task cannot be edited.', AppTheme.warning);
       return;
     }
 
+    final previous = step.done;
     setState(() {
       step.done = !step.done;
-      if (task.steps.any((item) => item.done)) {
-        task.status = SupervisorTaskStatus.inProgress;
-      }
-      if (task.steps.every((item) => item.done)) {
-        task.status = SupervisorTaskStatus.completed;
-      }
-      if (task.steps.every((item) => !item.done)) {
-        task.status = SupervisorTaskStatus.pending;
-      }
+      _recomputeTaskStatusFromSteps(task);
     });
+
+    final ok = await _tasksRepo.updateTaskStepCompletion(
+        task.id, step.id, step.done);
+    if (!ok) {
+      if (mounted) {
+        setState(() {
+          step.done = previous;
+          _recomputeTaskStatusFromSteps(task);
+        });
+      }
+      _showSnackbar(
+        'Failed to save step. Check your connection and retry.',
+        AppTheme.danger,
+      );
+      return;
+    }
 
     _showSnackbar(
       step.done ? '${step.title} checked.' : '${step.title} unchecked.',
@@ -437,7 +498,17 @@ class _TasksScreenState extends State<TasksScreen>
     );
   }
 
-  void _submitTaskForReview(SupervisorHodTask task) {
+  void _recomputeTaskStatusFromSteps(SupervisorHodTask task) {
+    if (task.steps.every((item) => !item.done)) {
+      task.status = SupervisorTaskStatus.pending;
+    } else if (task.steps.every((item) => item.done)) {
+      task.status = SupervisorTaskStatus.completed;
+    } else {
+      task.status = SupervisorTaskStatus.inProgress;
+    }
+  }
+
+  Future<void> _submitTaskForReview(SupervisorHodTask task) async {
     if (task.status == SupervisorTaskStatus.submitted) {
       _showSnackbar('This task is already submitted to HOD.', AppTheme.info);
       return;
@@ -467,6 +538,18 @@ class _TasksScreenState extends State<TasksScreen>
     }
 
     final now = DateTime.now();
+
+    // Persist FIRST so the HOD review queue sees the submission even if the
+    // user navigates away immediately; only then update the local state.
+    final ok =
+        await _tasksRepo.updateTaskStatus(task.id, SupervisorTaskStatus.submitted);
+    if (!ok) {
+      _showSnackbar(
+        'Failed to submit task. Check your connection and retry.',
+        AppTheme.danger,
+      );
+      return;
+    }
 
     setState(() {
       task.status = SupervisorTaskStatus.submitted;
@@ -503,6 +586,82 @@ class _TasksScreenState extends State<TasksScreen>
       ),
     );
     _showSnackbar('Submitted to HOD for review.', AppTheme.success);
+  }
+
+  /// Captures + uploads a photo/video proof to storage and persists the
+  /// proof bundle to the task (or step). Replaces the old placeholder paths.
+  Future<void> _pickAndUploadProof({
+    required SupervisorHodTask task,
+    required SupervisorChecklistStep? step,
+    required TaskProofBundle proof,
+    required String kind, // photo | video
+    required VoidCallback refreshAll,
+  }) async {
+    try {
+      final picker = ImagePicker();
+      final XFile? picked;
+      if (kind == 'photo') {
+        picked = await picker.pickImage(
+          source: ImageSource.camera,
+          maxWidth: 1600,
+          imageQuality: 82,
+        );
+      } else {
+        picked = await picker.pickVideo(
+          source: ImageSource.camera,
+          maxDuration: const Duration(seconds: 30),
+        );
+      }
+      if (picked == null) return;
+
+      final bytes = await picked.readAsBytes();
+      final ext = picked.name.contains('.')
+          ? picked.name.split('.').last.toLowerCase()
+          : (kind == 'photo' ? 'jpg' : 'mp4');
+      final path = await _tasksRepo.uploadTaskProof(
+        bytes,
+        taskId: task.id,
+        stepId: step?.id,
+        extension: ext,
+      );
+      if (path == null) {
+        _showSnackbar(
+          'Proof upload failed. Check your connection and retry.',
+          AppTheme.danger,
+        );
+        return;
+      }
+
+      if (kind == 'photo') {
+        proof.photoPath = path;
+      } else {
+        proof.videoPath = path;
+      }
+      proof.updatedAt = DateTime.now();
+
+      final ok = await _tasksRepo.updateTaskProof(
+        taskId: task.id,
+        stepId: step?.id,
+        proof: proof.toJson(),
+      );
+      if (!ok) {
+        _showSnackbar(
+          'Proof uploaded, but sync failed. It will be re-saved next time.',
+          AppTheme.warning,
+        );
+      }
+
+      refreshAll();
+      _showSnackbar(
+        kind == 'photo' ? 'Photo proof uploaded.' : 'Video proof uploaded.',
+        AppTheme.success,
+      );
+    } catch (e) {
+      _showSnackbar(
+        'Could not capture $kind proof: $e',
+        AppTheme.danger,
+      );
+    }
   }
 
   void _showProofSheet({
@@ -618,13 +777,13 @@ class _TasksScreenState extends State<TasksScreen>
                             : Icons.camera_alt_outlined,
                         color: AppTheme.info,
                         isRequired: requirement.photoRequired,
-                        onTap: () {
-                          proof.photoPath =
-                              'photo_${task.id}_${step?.id ?? 'single'}_${DateTime.now().millisecondsSinceEpoch}.jpg';
-                          proof.updatedAt = DateTime.now();
-                          refreshAll();
-                          _showSnackbar('Photo proof attached.', AppTheme.info);
-                        },
+                        onTap: () => _pickAndUploadProof(
+                          task: task,
+                          step: step,
+                          proof: proof,
+                          kind: 'photo',
+                          refreshAll: refreshAll,
+                        ),
                         onClear: proof.hasPhoto()
                             ? () {
                                 proof.photoPath = null;
@@ -644,14 +803,13 @@ class _TasksScreenState extends State<TasksScreen>
                             : Icons.videocam_outlined,
                         color: AppTheme.danger,
                         isRequired: requirement.videoRequired,
-                        onTap: () {
-                          proof.videoPath =
-                              'video_${task.id}_${step?.id ?? 'single'}_${DateTime.now().millisecondsSinceEpoch}.mp4';
-                          proof.updatedAt = DateTime.now();
-                          refreshAll();
-                          _showSnackbar(
-                              'Video proof attached.', AppTheme.danger);
-                        },
+                        onTap: () => _pickAndUploadProof(
+                          task: task,
+                          step: step,
+                          proof: proof,
+                          kind: 'video',
+                          refreshAll: refreshAll,
+                        ),
                         onClear: proof.hasVideo()
                             ? () {
                                 proof.videoPath = null;

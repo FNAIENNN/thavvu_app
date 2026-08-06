@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../screens/tasks_screen.dart';
@@ -16,15 +18,23 @@ class SupabaseTasksRepository {
 
   Future<List<SupervisorHodTask>> fetchSupervisorTasks(String supervisorId) async {
     try {
-      final response = await _client
+      final tasksRes = await _client
           .from(_tasksTable)
-          .select('*, task_steps(*)')
+          .select()
           .eq('assigned_supervisor_id', supervisorId)
           .order('due_date', ascending: true);
+      final tasks = (tasksRes as List).cast<Map<String, dynamic>>();
+      if (tasks.isEmpty) return [];
 
-      return (response as List).map((json) {
-        final stepsJson = json['task_steps'] as List? ?? [];
-        final steps = stepsJson.map((s) => SupervisorChecklistStep(
+      // task_steps has NO FK to tasks (and its task_id is text while
+      // tasks.id is uuid), so a `select('*, task_steps(*)')` embed fails.
+      // Fetch steps in a second query and merge client-side instead.
+      final steps = await _fetchStepsForTasks(
+          tasks.map((t) => t['id'].toString()).toList());
+
+      return tasks.map((json) {
+        final stepsJson = steps[json['id'].toString()] ?? const [];
+        final parsedSteps = stepsJson.map((s) => SupervisorChecklistStep(
           id: s['id'],
           title: s['title'],
           instruction: s['instruction'] ?? '',
@@ -32,9 +42,6 @@ class SupabaseTasksRepository {
           proofRequirement: _parseProofReq(s['proof_requirement']),
           proof: _parseProofBundle(s['proof']),
         )).toList();
-        
-        steps.sort((a, b) => (stepsJson.firstWhere((s) => s['id'] == a.id)['step_order'] as int? ?? 0)
-            .compareTo(stepsJson.firstWhere((s) => s['id'] == b.id)['step_order'] as int? ?? 0));
 
         return SupervisorHodTask(
           id: json['id'],
@@ -55,13 +62,34 @@ class SupabaseTasksRepository {
           submittedAt: json['submitted_at'] != null ? DateTime.parse(json['submitted_at']).toLocal() : null,
           proofRequirement: _parseProofReq(json['proof_requirement']),
           proof: _parseProofBundle(json['proof']),
-          steps: steps,
+          steps: parsedSteps,
         );
       }).toList();
     } catch (e) {
       debugPrint('Error fetching supervisor tasks: $e');
       return [];
     }
+  }
+
+  /// Fetches task_steps for a batch of task ids, grouped by task_id and
+  /// already ordered by step_order (no FK/embed dependency).
+  Future<Map<String, List<Map<String, dynamic>>>> _fetchStepsForTasks(
+      List<String> taskIds) async {
+    final result = <String, List<Map<String, dynamic>>>{};
+    if (taskIds.isEmpty) return result;
+    try {
+      final rows = await _client
+          .from(_stepsTable)
+          .select()
+          .inFilter('task_id', taskIds)
+          .order('step_order', ascending: true);
+      for (final r in (rows as List).cast<Map<String, dynamic>>()) {
+        result.putIfAbsent(r['task_id']?.toString() ?? '', () => []).add(r);
+      }
+    } catch (e) {
+      debugPrint('fetch task steps failed: $e');
+    }
+    return result;
   }
 
   Future<bool> updateTaskStatus(String taskId, SupervisorTaskStatus status) async {
@@ -78,21 +106,93 @@ class SupabaseTasksRepository {
     }
   }
 
+  /// Persists a single checklist step's done flag (supervisor toggle).
+  Future<bool> updateTaskStepCompletion(
+    String taskId,
+    String stepId,
+    bool isDone,
+  ) async {
+    try {
+      await _client
+          .from(_stepsTable)
+          .update({'is_done': isDone})
+          .eq('task_id', taskId)
+          .eq('id', stepId);
+      return true;
+    } catch (e) {
+      debugPrint('updateTaskStepCompletion failed: $e');
+      return false;
+    }
+  }
+
+  /// Persists a proof bundle on a task (stepId null) or a single step.
+  Future<bool> updateTaskProof({
+    required String taskId,
+    String? stepId,
+    required Map<String, dynamic> proof,
+  }) async {
+    try {
+      if (stepId != null && stepId.isNotEmpty) {
+        await _client
+            .from(_stepsTable)
+            .update({'proof': proof})
+            .eq('task_id', taskId)
+            .eq('id', stepId);
+      } else {
+        await _client
+            .from(_tasksTable)
+            .update({'proof': proof})
+            .eq('id', taskId);
+      }
+      return true;
+    } catch (e) {
+      debugPrint('updateTaskProof failed: $e');
+      return false;
+    }
+  }
+
+  /// Uploads a proof image/video to the `task-proofs` bucket (uid-prefixed
+  /// path, matching the storage RLS policy) and returns the path or null.
+  Future<String?> uploadTaskProof(
+    Uint8List bytes, {
+    required String taskId,
+    String? stepId,
+    required String extension,
+  }) async {
+    try {
+      final user = _client.auth.currentUser;
+      if (user == null) return null;
+      final now = DateTime.now();
+      final path =
+          '${user.id}/task/$taskId/${stepId ?? 'single'}_${now.millisecondsSinceEpoch}.$extension';
+      await _client.storage.from('task-proofs').uploadBinary(path, bytes);
+      return path;
+    } catch (e) {
+      debugPrint('uploadTaskProof failed: $e');
+      return null;
+    }
+  }
+
   // ==========================================================
   // HOD SIDE METHODS
   // ==========================================================
 
   Future<List<HodTaskRecord>> fetchHodTasks(String hodId) async {
     try {
-      final response = await _client
+      final tasksRes = await _client
           .from(_tasksTable)
-          .select('*, task_steps(*)')
+          .select()
           // Usually you'd filter by siteId or created_by, but assuming HOD sees what they assigned
           .eq('assigned_by', hodId)
           .order('assigned_at', ascending: false);
+      final tasks = (tasksRes as List).cast<Map<String, dynamic>>();
+      if (tasks.isEmpty) return [];
 
-      return (response as List).map((json) {
-        final stepsJson = json['task_steps'] as List? ?? [];
+      final steps = await _fetchStepsForTasks(
+          tasks.map((t) => t['id'].toString()).toList());
+
+      return tasks.map((json) {
+        final stepsJson = steps[json['id'].toString()] ?? const [];
         final items = stepsJson.map((s) => HodTaskChecklistItem(
           title: s['title'],
           done: s['is_done'] ?? false,
@@ -135,6 +235,7 @@ class SupabaseTasksRepository {
 
   Future<bool> createTask(HodTaskRecord task) async {
     try {
+      final proofReq = _proofRequirementToJson(task.requiredProofs);
       final response = await _client.from(_tasksTable).insert({
         'title': task.title,
         'description': task.description,
@@ -150,6 +251,7 @@ class SupabaseTasksRepository {
         'thavvu_id': task.thavvuPointId,
         'thavvu_point_id': task.thavvuPointId,
         'status': 'pending',
+        'proof_requirement': proofReq,
       }).select().single();
 
       final taskId = response['id'];
@@ -162,6 +264,7 @@ class SupabaseTasksRepository {
           'is_done': item.done,
           'note': item.note,
           'step_order': order++,
+          'proof_requirement': proofReq,
         }).toList();
 
         await _client.from(_stepsTable).insert(stepsData);
@@ -178,8 +281,8 @@ class SupabaseTasksRepository {
   // ==========================================================
 
   TaskProofRequirement _parseProofReq(dynamic json) {
-    if (json == null) return const TaskProofRequirement();
-    final map = json as Map<String, dynamic>;
+    final map = _proofAsMap(json);
+    if (map == null) return const TaskProofRequirement();
     return TaskProofRequirement(
       photoRequired: map['photoRequired'] == true,
       videoRequired: map['videoRequired'] == true,
@@ -189,14 +292,56 @@ class SupabaseTasksRepository {
   }
 
   TaskProofBundle _parseProofBundle(dynamic json) {
-    if (json == null) return TaskProofBundle();
-    final map = json as Map<String, dynamic>;
+    final map = _proofAsMap(json);
+    if (map == null) return TaskProofBundle();
+    TaskLocationProof? location;
+    final loc = map['location'];
+    if (loc is Map) {
+      final locMap = Map<String, dynamic>.from(loc);
+      location = TaskLocationProof(
+        label: locMap['label']?.toString() ?? '',
+        latitude: (locMap['latitude'] as num?)?.toDouble() ?? 0,
+        longitude: (locMap['longitude'] as num?)?.toDouble() ?? 0,
+        capturedAt: DateTime.tryParse(locMap['capturedAt']?.toString() ?? '') ??
+            DateTime.now(),
+      );
+    }
     return TaskProofBundle(
-      photoPath: map['photoPath'],
-      videoPath: map['videoPath'],
-      note: map['note'] ?? '',
-      // Location needs parsing too if present
+      photoPath: map['photoPath']?.toString(),
+      videoPath: map['videoPath']?.toString(),
+      location: location,
+      note: map['note']?.toString() ?? '',
+      updatedAt: map['updatedAt'] != null
+          ? DateTime.tryParse(map['updatedAt'].toString())
+          : null,
     );
+  }
+
+  /// proof_requirement / proof are jsonb in the model but stored as TEXT /
+  /// jsonb columns — normalise both string (JSON-encoded) and map shapes.
+  Map<String, dynamic>? _proofAsMap(dynamic json) {
+    if (json == null) return null;
+    if (json is Map) return Map<String, dynamic>.from(json);
+    if (json is String) {
+      try {
+        final decoded = jsonDecode(json);
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /// Serialises the HOD's required-proof set into the JSON string the
+  /// `proof_requirement` TEXT column stores (read back by [_parseProofReq]).
+  String _proofRequirementToJson(List<HodProofType> proofs) {
+    return jsonEncode({
+      'photoRequired': proofs.contains(HodProofType.photo),
+      'videoRequired': proofs.contains(HodProofType.video),
+      'locationRequired': proofs.contains(HodProofType.location),
+      'noteRequired': proofs.contains(HodProofType.textNote),
+    });
   }
 
   SupervisorTaskStatus _parseSupervisorStatus(String? status) {

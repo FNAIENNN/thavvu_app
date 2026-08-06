@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../theme/app_theme.dart';
 import '../../../widgets/shared_widgets.dart';
 import '../../../widgets/collapsible_tab_scaffold.dart';
 import '../../../services/supabase_tasks_repository.dart';
-
 // ── HOD Tasks & Checklist Production-Ready Frontend Module ────────────────
 // This screen is intentionally HOD-specific. It mirrors the supervisor
 // TasksScreen UI language, but changes the actions from "complete work" to
@@ -260,16 +260,20 @@ class HodTaskAuditLog {
 }
 
 class HodSupervisorSummary {
-  final String id;
+  final String id; // profiles.emp_id — what tasks.assigned_supervisor_id stores
+  final String profileUuid; // profiles.id
   final String name;
   final String siteName;
   final String thavvuPointId;
+  final String siteId;
 
   const HodSupervisorSummary({
     required this.id,
+    this.profileUuid = '',
     required this.name,
-    required this.siteName,
-    required this.thavvuPointId,
+    this.siteName = '',
+    this.thavvuPointId = '',
+    this.siteId = '',
   });
 }
 
@@ -313,28 +317,83 @@ class _HodTasksScreenState extends State<HodTasksScreen>
   final Set<HodProofType> _draftRequiredProofs = <HodProofType>{
     HodProofType.photo,
   };
-  String _draftSupervisorId = 'SUP-VJA-001';
+  String _draftSupervisorId = '';
 
-  final List<HodSupervisorSummary> _supervisors = const [
-    HodSupervisorSummary(
-      id: 'SUP-VJA-001',
-      name: 'Supervisor Rajesh',
-      siteName: 'Site A',
-      thavvuPointId: 'TP-001',
-    ),
-    HodSupervisorSummary(
-      id: 'SUP-VJA-002',
-      name: 'Supervisor Naresh',
-      siteName: 'Site B',
-      thavvuPointId: 'TP-002',
-    ),
-    HodSupervisorSummary(
-      id: 'SUP-VJA-003',
-      name: 'Supervisor Kiran',
-      siteName: 'Site C',
-      thavvuPointId: 'TP-003',
-    ),
-  ];
+  List<HodSupervisorSummary> _supervisors = [];
+
+  /// Loads the tenant's real supervisors (profiles, role=supervisor) and
+  /// resolves each one's active Thavvu Point + site for task assignment.
+  Future<void> _loadSupervisors() async {
+    try {
+      final client = Supabase.instance.client;
+      final profilesRes = await client
+          .from('profiles')
+          .select('id, full_name, emp_id')
+          .eq('role', 'supervisor')
+          .order('full_name');
+      final profiles = (profilesRes as List).cast<Map<String, dynamic>>();
+
+      final pointById = <String, Map<String, dynamic>>{};
+      try {
+        final pointsRes = await client
+            .from('thavvu_points')
+            .select('id, site_id, point_name')
+            .limit(500);
+        for (final p in (pointsRes as List).cast<Map<String, dynamic>>()) {
+          pointById[p['id']?.toString() ?? ''] = p;
+        }
+      } catch (_) {
+        // Points unavailable — supervisors still list with blank assignment.
+      }
+
+      final assignmentsBySupervisor = <String, List<String>>{};
+      try {
+        final assignsRes = await client
+            .from('thavvu_point_assignments')
+            .select('supervisor_id, thavvu_point_id')
+            .eq('is_active', true)
+            .limit(500);
+        for (final a in (assignsRes as List).cast<Map<String, dynamic>>()) {
+          final sid = a['supervisor_id']?.toString() ?? '';
+          final pid = a['thavvu_point_id']?.toString() ?? '';
+          if (sid.isEmpty || pid.isEmpty) continue;
+          assignmentsBySupervisor
+              .putIfAbsent(sid, () => <String>[])
+              .add(pid);
+        }
+      } catch (_) {
+        // Assignments unavailable — supervisors still list with no point.
+      }
+
+      final list = <HodSupervisorSummary>[];
+      for (final p in profiles) {
+        final profileUuid = p['id']?.toString() ?? '';
+        final empId = p['emp_id']?.toString().trim() ?? '';
+        if (empId.isEmpty) continue;
+        final pointIds = assignmentsBySupervisor[profileUuid] ?? const [];
+        final point = pointIds.isEmpty ? null : pointById[pointIds.first];
+        list.add(HodSupervisorSummary(
+          id: empId,
+          profileUuid: profileUuid,
+          name: p['full_name']?.toString().trim() ??
+              empId,
+          siteName: point?['point_name']?.toString() ?? '',
+          thavvuPointId: point?['id']?.toString() ?? '',
+          siteId: point?['site_id']?.toString() ?? '',
+        ));
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _supervisors = list;
+        if (_draftSupervisorId.isEmpty && list.isNotEmpty) {
+          _draftSupervisorId = list.first.id;
+        }
+      });
+    } catch (e) {
+      debugPrint('_loadSupervisors failed: $e');
+    }
+  }
 
   List<HodTaskRecord> _tasks = [];
 
@@ -345,6 +404,7 @@ class _HodTasksScreenState extends State<HodTasksScreen>
     super.initState();
     _tabController = TabController(length: 7, vsync: this);
     _seedAuditLogs();
+    _loadSupervisors();
     _loadTasks();
   }
 
@@ -555,6 +615,14 @@ class _HodTasksScreenState extends State<HodTasksScreen>
       return;
     }
 
+    if (_supervisors.isEmpty) {
+      _showSnackbar(
+        'No supervisors available yet. Create a supervisor account first.',
+        AppTheme.danger,
+      );
+      return;
+    }
+
     final supervisor =
         _supervisors.firstWhere((s) => s.id == _draftSupervisorId);
     final now = DateTime.now();
@@ -584,7 +652,7 @@ class _HodTasksScreenState extends State<HodTasksScreen>
       priority: _draftPriority,
       assignedSupervisorId: supervisor.id,
       assignedSupervisorName: supervisor.name,
-      siteId: supervisor.siteName.replaceAll(' ', '-').toUpperCase(),
+      siteId: supervisor.siteId,
       siteName: supervisor.siteName,
       thavvuPointId: supervisor.thavvuPointId,
       dueDate: _draftDueDate,
@@ -618,7 +686,9 @@ class _HodTasksScreenState extends State<HodTasksScreen>
     _draftType = HodTaskType.daily;
     _draftPriority = HodTaskPriority.normal;
     _draftDueDate = DateTime.now();
-    _draftSupervisorId = _supervisors.first.id;
+    if (_supervisors.isNotEmpty) {
+      _draftSupervisorId = _supervisors.first.id;
+    }
     _draftRequiredProofs
       ..clear()
       ..add(HodProofType.photo);
@@ -1078,10 +1148,12 @@ class _HodTasksScreenState extends State<HodTasksScreen>
   }
 
   Widget _buildAssignTab() {
-    final selectedSupervisor = _supervisors.firstWhere(
-      (item) => item.id == _draftSupervisorId,
-      orElse: () => _supervisors.first,
-    );
+    final selectedSupervisor = _supervisors.isEmpty
+        ? null
+        : _supervisors.firstWhere(
+            (item) => item.id == _draftSupervisorId,
+            orElse: () => _supervisors.first,
+          );
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -1190,9 +1262,9 @@ class _HodTasksScreenState extends State<HodTasksScreen>
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _buildInfoChip('Site', selectedSupervisor.siteName, AppTheme.info),
-                    _buildInfoChip('Thavvu', selectedSupervisor.thavvuPointId, AppTheme.warning),
-                    _buildInfoChip('Supervisor ID', selectedSupervisor.id, AppTheme.success),
+                    _buildInfoChip('Site', selectedSupervisor?.siteName ?? '—', AppTheme.info),
+                    _buildInfoChip('Thavvu', selectedSupervisor?.thavvuPointId ?? '—', AppTheme.warning),
+                    _buildInfoChip('Supervisor ID', selectedSupervisor?.id ?? '—', AppTheme.success),
                   ],
                 ),
               ],

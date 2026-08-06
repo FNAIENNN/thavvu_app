@@ -12,6 +12,7 @@ import '../services/device_file_picker.dart';
 import '../services/gin_repository.dart';
 import '../services/photo_upload_service.dart';
 import '../services/stock_inventory_repository.dart';
+import '../services/thavvu_point_context.dart';
 import 'gin/gin_bill_details_screen.dart';
 import 'gin/gin_flow_tab.dart';
 import '../widgets/collapsible_tab_scaffold.dart';
@@ -1589,7 +1590,12 @@ class _StockFeatureTabState extends State<_StockFeatureTab> {
                       child: Text('${p.name} · ${p.friendlyType}',
                           overflow: TextOverflow.ellipsis)))
                   .toList(),
-              onChanged: (p) => setState(() => _selectedPoint = p),
+              onChanged: (p) {
+                if (p != null) {
+                  ThavvuPointContext.instance.select(p.id);
+                }
+                setState(() => _selectedPoint = p);
+              },
             ),
           ),
           const SizedBox(height: 10),
