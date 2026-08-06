@@ -109,9 +109,9 @@ class StockInventoryRepository {
 
   Future<List<Map<String, String>>> fetchThavvuPoints({String? siteId}) async {
     try {
-      var query = _client.from('thavvu_points').select('id, point_name, site_id');
+      var query = _client.from('thavvu_points').select('id, point_name, site_id, status');
       if (siteId != null && siteId.isNotEmpty) {
-        query = query.eq('site_id', siteId);
+        query = query.or('site_id.eq.$siteId,site_id.is.null');
       }
       final rows = await query.order('point_name', ascending: true);
       final list = <Map<String, String>>[];
@@ -119,8 +119,21 @@ class StockInventoryRepository {
         final map = _asMap(row);
         final id = _string(map, 'id');
         final name = _string(map, 'point_name', fallback: id);
+        final sId = _string(map, 'site_id');
         if (id.isNotEmpty) {
-          list.add({'id': id, 'name': name});
+          list.add({'id': id, 'name': name, 'site_id': sId});
+        }
+      }
+      if (list.isEmpty) {
+        // Fallback to fetch all thavvu_points without site filtering if siteId didn't match
+        final allRows = await _client.from('thavvu_points').select('id, point_name, site_id').order('point_name', ascending: true);
+        for (final row in allRows as List) {
+          final map = _asMap(row);
+          final id = _string(map, 'id');
+          final name = _string(map, 'point_name', fallback: id);
+          if (id.isNotEmpty) {
+            list.add({'id': id, 'name': name, 'site_id': _string(map, 'site_id')});
+          }
         }
       }
       return list;
@@ -145,6 +158,27 @@ class StockInventoryRepository {
   Future<void> stopWatching(RealtimeChannel? channel) async {
     if (channel == null) return;
     await _client.removeChannel(channel);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ORDERS (HOD → supervisor)
+  // ═══════════════════════════════════════════════════════════════════
+
+  Future<List<StockOrder>> fetchOrders({String? thavvuPointId, String? stockPointId}) async {
+    try {
+      var query = _client.from(ordersTable).select();
+      final targetPoint = thavvuPointId ?? stockPointId;
+      if (targetPoint != null && targetPoint.isNotEmpty) {
+        query = query.or('thavvu_point_id.eq.$targetPoint,stock_point_id.eq.$targetPoint');
+      }
+      final response = await query.order('created_at', ascending: false);
+      return (response as List)
+          .map((row) => StockOrder.fromJson(_asMap(row)))
+          .toList();
+    } catch (e) {
+      debugPrint('fetchOrders failed: $e');
+      return const [];
+    }
   }
 
   /// Issues stock through the database transaction used by all supervisor

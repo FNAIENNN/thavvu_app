@@ -1239,13 +1239,142 @@ class _HodReadOnlyOverviewScreenState extends State<HodReadOnlyOverviewScreen>
                 ),
                 const SizedBox(width: 10),
                 _buildMiniAction(
-                  icon: Icons.storefront_rounded,
-                  label: 'Suppliers',
-                  value: 'New',
-                  color: AppTheme.info,
-                  onTap: () => widget.onNavigateModule('/suppliers'),
+                  icon: Icons.fingerprint_rounded,
+                  label: 'Attendance',
+                  value: 'Live',
+                  color: const Color(0xFF0FA37A),
+                  onTap: () => widget.onNavigateModule('/attendance'),
                 ),
               ],
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'HOD Modules Overview',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 10),
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 3,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 1.1,
+              children: [
+                _buildGridModuleTile(
+                  icon: Icons.fingerprint_rounded,
+                  label: 'Attendance',
+                  color: const Color(0xFF0FA37A),
+                  onTap: () => widget.onNavigateModule('/attendance'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.construction_rounded,
+                  label: 'Machines',
+                  color: const Color(0xFFD97706),
+                  onTap: () => widget.onNavigateModule('/machines'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.edit_calendar_rounded,
+                  label: 'Daily Data',
+                  color: const Color(0xFF1976D2),
+                  onTap: () => widget.onNavigateModule('/daily'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.inventory_2_outlined,
+                  label: 'Stock',
+                  color: const Color(0xFFE6A817),
+                  onTap: () => widget.onNavigateModule('/stock'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.storefront_rounded,
+                  label: 'Suppliers',
+                  color: const Color(0xFF2563EB),
+                  onTap: () => widget.onNavigateModule('/suppliers'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.key_outlined,
+                  label: 'Rental',
+                  color: const Color(0xFFE53935),
+                  onTap: () => widget.onNavigateModule('/rental'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.account_balance_wallet_outlined,
+                  label: 'Cash',
+                  color: const Color(0xFF0FA37A),
+                  onTap: () => widget.onNavigateModule('/cash'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.restaurant_menu_outlined,
+                  label: 'Food',
+                  color: const Color(0xFFE6A817),
+                  onTap: () => widget.onNavigateModule('/food'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.task_alt_outlined,
+                  label: 'Tasks',
+                  color: const Color(0xFF0FA37A),
+                  onTap: () => widget.onNavigateModule('/tasks'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.bar_chart_rounded,
+                  label: 'Reports',
+                  color: const Color(0xFF9C27B0),
+                  onTap: () => widget.onNavigateModule('/reports'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.map_outlined,
+                  label: 'Maps',
+                  color: const Color(0xFF1976D2),
+                  onTap: () => widget.onNavigateModule('/maps'),
+                ),
+                _buildGridModuleTile(
+                  icon: Icons.tune_rounded,
+                  label: 'Registry',
+                  color: const Color(0xFF6D4C41),
+                  onTap: () => widget.onNavigateModule('/registry'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGridModuleTile({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withOpacity(0.2)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w800,
+                color: color,
+              ),
             ),
           ],
         ),

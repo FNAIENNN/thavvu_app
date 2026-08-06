@@ -185,6 +185,12 @@ class HodSiteModulesScreen extends StatelessWidget {
           hodId: hodId,
         );
         break;
+      case 'Attendance':
+        child = HodAttendanceScreen(
+          title: '$siteName Attendance',
+          moduleFilter: 'Attendance',
+        );
+        break;
       default:
         child = module.screen;
     }

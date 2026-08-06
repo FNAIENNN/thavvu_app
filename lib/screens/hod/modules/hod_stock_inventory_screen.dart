@@ -185,18 +185,8 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
       final id = pt['id'] ?? '';
       final name = pt['name'] ?? id;
       if (id.isNotEmpty) {
-        map[id] = name;
+        map[id] = name.isEmpty ? id : name;
       }
-    }
-    for (final b in _balances) {
-      if (b.stockPointId.isNotEmpty && b.stockPointName.isNotEmpty) {
-        map.putIfAbsent(b.stockPointId, () => b.stockPointName);
-      }
-    }
-    if (map.isEmpty) {
-      map['TP-VJA-001'] = 'Thavvu Point 1 — Vijayawada Yard';
-      map['TP-VJA-002'] = 'Thavvu Point 2 — Delta Pond';
-      map['TP-HYD-001'] = 'Thavvu Point 1 — Hyderabad Site';
     }
     return map;
   }
@@ -240,7 +230,7 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
       siteId: _siteId,
       stockPointId: _pointId,
       stockPointName: _pointName,
-      thavvuPointId: await _contextService.resolvePointId(),
+      thavvuPointId: _pointId,
       notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
       items: [
         for (final draft in validItems)
