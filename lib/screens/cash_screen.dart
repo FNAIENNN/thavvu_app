@@ -2615,7 +2615,7 @@ class _CashModuleScreenState extends State<CashModuleScreen>
   }
 
   // ── Updated submit for Request Pay to use saved accounts ──────────────────
-  void _submitRequestPay() {
+  Future<void> _submitRequestPay() async {
     if (_requestSelectedThavvuId == null) {
       _showSnackbar('Please select Thavvu ID', AppTheme.danger);
       return;
@@ -2761,6 +2761,41 @@ class _CashModuleScreenState extends State<CashModuleScreen>
     setState(() {
       _financeRequests.insert(0, request);
     });
+
+    // WRITE-THROUGH to Supabase so the HOD review queue sees the request.
+    // (Previously this was local-only; HOD never saw finance requests.)
+    try {
+      await _cashRepo.createFinanceRequest(
+        siteId: _cashSiteId,
+        requestNo: 'REQ-${DateTime.now().millisecondsSinceEpoch}',
+        thavvuPointId: _requestSelectedThavvuId,
+        type: _requestSelectedCategory,
+        amount: amount,
+        category: _requestSelectedCategory,
+        reason: request.reason,
+        paymentMethod: _requestPaymentMethod == 'upi' ? 'upi' : 'bank',
+        items: items
+            .map((i) => {
+                  'name': i.name,
+                  'quantity': i.quantity,
+                  'amount': i.amount,
+                })
+            .toList(),
+        proofPath: (_requestPhotoPath ?? '').isEmpty
+            ? _requestInvoiceBillPath
+            : _requestPhotoPath,
+        voicePath: _requestVoicePath,
+      );
+    } catch (e) {
+      debugPrint('finance request write-through failed: $e');
+      if (mounted) {
+        _showSnackbar(
+          'Request saved locally, but sync to HOD failed. Check connection.',
+          AppTheme.warning,
+        );
+      }
+    }
+
     unawaited(
       HodSiteWorkspaceService().recordSupervisorActivityForCurrentSession(
         module: 'Cash',

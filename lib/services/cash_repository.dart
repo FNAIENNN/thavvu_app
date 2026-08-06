@@ -12,6 +12,7 @@ class CashRepository {
 
   static const allocationsTable = 'cash_allocations';
   static const transactionsTable = 'cash_transactions';
+  static const financeRequestsTable = 'cash_finance_requests';
 
   // ═══════════════════════════════════════════════════════════════════
   // ALLOCATIONS (HOD → supervisor)
@@ -144,6 +145,79 @@ class CashRepository {
       return (totalIn - totalOut).clamp(0, double.infinity);
     } catch (_) {
       return 0;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // FINANCE REQUESTS (supervisor -> HOD review)
+  // ═══════════════════════════════════════════════════════════════════
+
+  Future<List<CashFinanceRequestRecord>> fetchFinanceRequests({
+    required String siteId,
+  }) async {
+    final response = await _client
+        .from(financeRequestsTable)
+        .select()
+        .eq('site_id', siteId)
+        .order('created_at', ascending: false);
+    return (response as List)
+        .map((row) => CashFinanceRequestRecord.fromJson(_asMap(row)))
+        .toList();
+  }
+
+  Future<CashFinanceRequestRecord> createFinanceRequest({
+    required String siteId,
+    required String requestNo,
+    String? thavvuPointId,
+    required String type,
+    required double amount,
+    String? category,
+    String? reason,
+    required String paymentMethod,
+    List<Map<String, dynamic>> items = const [],
+    String? proofPath,
+    String? voicePath,
+  }) async {
+    final response = await _client
+        .from(financeRequestsTable)
+        .insert({
+          'request_no': requestNo,
+          'site_id': siteId,
+          'thavvu_point_id': thavvuPointId,
+          'type': type,
+          'amount': amount,
+          'category': category,
+          'reason': reason,
+          'payment_method': paymentMethod,
+          'items': items,
+          'proof_path': proofPath,
+          'voice_path': voicePath,
+          'status': 'pending',
+          'requested_by': _client.auth.currentUser?.id ?? '',
+          'is_demo': false,
+        })
+        .select()
+        .single();
+    return CashFinanceRequestRecord.fromJson(_asMap(response));
+  }
+
+  Future<bool> updateFinanceRequestStatus({
+    required String requestId,
+    required String status,
+    String? hodNote,
+  }) async {
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      await _client.from(financeRequestsTable).update({
+        'status': status,
+        'hod_id': _client.auth.currentUser?.id,
+        'hod_note': hodNote,
+        'reviewed_at': now,
+      }).eq('id', requestId);
+      return true;
+    } catch (e) {
+      debugPrint('Error updating finance request: $e');
+      return false;
     }
   }
 
@@ -298,6 +372,65 @@ class CashTransactionRecord {
       isDemo: json['is_demo'] == true,
       hodNote: json['hod_note'] as String?,
       createdBy: json['created_by'] as String?,
+      createdAt: DateTime.tryParse(CashRepository._string(json, 'created_at')),
+    );
+  }
+}
+
+/// A supervisor's cash finance request awaiting HOD review.
+class CashFinanceRequestRecord {
+  final String id;
+  final String requestNo;
+  final String siteId;
+  final String type;
+  final double amount;
+  final String? category;
+  final String? reason;
+  final String paymentMethod;
+  final String status;
+  final List<Map<String, dynamic>> items;
+  final String? proofPath;
+  final String? voicePath;
+  final String? hodNote;
+  final DateTime? createdAt;
+
+  const CashFinanceRequestRecord({
+    required this.id,
+    required this.requestNo,
+    required this.siteId,
+    this.type = 'expense',
+    required this.amount,
+    this.category,
+    this.reason,
+    this.paymentMethod = 'upi',
+    this.status = 'pending',
+    this.items = const [],
+    this.proofPath,
+    this.voicePath,
+    this.hodNote,
+    this.createdAt,
+  });
+
+  factory CashFinanceRequestRecord.fromJson(Map<String, dynamic> json) {
+    return CashFinanceRequestRecord(
+      id: CashRepository._string(json, 'id'),
+      requestNo: CashRepository._string(json, 'request_no'),
+      siteId: CashRepository._string(json, 'site_id'),
+      type: CashRepository._string(json, 'type', fallback: 'expense'),
+      amount: CashRepository._double(json, 'amount'),
+      category: json['category'] as String?,
+      reason: json['reason'] as String?,
+      paymentMethod:
+          CashRepository._string(json, 'payment_method', fallback: 'upi'),
+      status: CashRepository._string(json, 'status', fallback: 'pending'),
+      items: json['items'] is List
+          ? (json['items'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList()
+          : const [],
+      proofPath: json['proof_path'] as String?,
+      voicePath: json['voice_path'] as String?,
+      hodNote: json['hod_note'] as String?,
       createdAt: DateTime.tryParse(CashRepository._string(json, 'created_at')),
     );
   }

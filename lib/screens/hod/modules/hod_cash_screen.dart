@@ -46,6 +46,8 @@ class _HodCashScreenState extends State<HodCashScreen>
 
   final List<CashAllocation> _allocations = <CashAllocation>[];
   final List<CashTransactionRecord> _transactions = <CashTransactionRecord>[];
+  final List<CashFinanceRequestRecord> _financeRequests =
+      <CashFinanceRequestRecord>[];
   final List<_CashSupervisor> _supervisors = <_CashSupervisor>[];
 
   bool _loading = true;
@@ -104,6 +106,7 @@ class _HodCashScreenState extends State<HodCashScreen>
         _cashRepo.fetchTransactions(siteId: _hodSiteId),
         _cashRepo.availableBalance(_hodSiteId),
         _loadSupervisors(),
+        _cashRepo.fetchFinanceRequests(siteId: _hodSiteId),
       ]);
       if (!mounted) return;
       setState(() {
@@ -117,6 +120,9 @@ class _HodCashScreenState extends State<HodCashScreen>
         _supervisors
           ..clear()
           ..addAll(results[3] as List<_CashSupervisor>);
+        _financeRequests
+          ..clear()
+          ..addAll(results[4] as List<CashFinanceRequestRecord>);
         _loading = false;
       });
     } catch (_) {
@@ -290,6 +296,83 @@ class _HodCashScreenState extends State<HodCashScreen>
       await _loadServerData();
     } else {
       _showSnack('Review failed. Check RLS permissions.', AppTheme.danger);
+    }
+  }
+
+  Future<void> _reviewFinanceRequest(
+    CashFinanceRequestRecord request,
+    String newStatus,
+  ) async {
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(newStatus == 'approved' ? 'Approve request' : 'Reject request'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${request.requestNo} • ${request.category ?? request.type} • ${_formatMoney(request.amount)}',
+              style: const TextStyle(
+                  fontSize: 13.5, color: AppTheme.textSecondary),
+            ),
+            if ((request.reason ?? '').isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(request.reason!,
+                  style: const TextStyle(fontSize: 12.5, color: AppTheme.textMuted)),
+            ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: noteController,
+              maxLines: 2,
+              decoration: const InputDecoration(
+                labelText: 'HOD note (optional)',
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: newStatus == 'rejected'
+                  ? AppTheme.danger
+                  : AppTheme.primary,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(
+              newStatus == 'approved' ? 'Approve' : 'Reject',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    final ok = await _cashRepo.updateFinanceRequestStatus(
+      requestId: request.id,
+      status: newStatus,
+      hodNote:
+          noteController.text.trim().isNotEmpty ? noteController.text.trim() : null,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (ok) {
+      _showSnack(
+        newStatus == 'rejected'
+            ? 'Finance request rejected.'
+            : 'Finance request approved.',
+        AppTheme.success,
+      );
+      await _loadServerData();
+    } else {
+      _showSnack('Review failed. Check connection and retry.', AppTheme.danger);
     }
   }
 
@@ -894,6 +977,79 @@ class _HodCashScreenState extends State<HodCashScreen>
               ),
             ),
           ),
+        const SizedBox(height: 20),
+        _sectionTitle(Icons.request_page_outlined, 'Finance requests',
+            '${_financeRequests.where((r) => r.status == 'pending').length} pending'),
+        if (_financeRequests.isEmpty)
+          _panel(
+            child: _emptyView('No finance requests from supervisors yet.'),
+          )
+        else
+          ..._financeRequests.where((r) => r.status == 'pending').map(
+                (req) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(req.requestNo,
+                                  style: const TextStyle(
+                                      fontSize: 13.5, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
+                            ),
+                            _statusChip(req.status),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '${(req.category ?? req.type).toUpperCase()} • ${req.paymentMethod.toUpperCase()} • ${_formatMoney(req.amount)}',
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textSecondary),
+                        ),
+                        if ((req.reason ?? '').isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(req.reason!,
+                              style: const TextStyle(fontSize: 12.5, color: AppTheme.textMuted)),
+                        ],
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _reviewFinanceRequest(req, 'approved'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppTheme.success,
+                                  side: const BorderSide(color: AppTheme.successLight),
+                                ),
+                                icon: const Icon(Icons.check_circle_outline, size: 16),
+                                label: const Text('Approve', style: TextStyle(fontWeight: FontWeight.w700)),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _reviewFinanceRequest(req, 'rejected'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppTheme.danger,
+                                  side: const BorderSide(color: AppTheme.dangerLight),
+                                ),
+                                icon: const Icon(Icons.cancel_outlined, size: 16),
+                                label: const Text('Reject', style: TextStyle(fontWeight: FontWeight.w700)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
       ],
     );
   }
