@@ -273,6 +273,7 @@ class _HodAttendanceScreenState extends State<HodAttendanceScreen>
     _workers = [];
     _outsideWorkers = [];
     _confirmedBatches = [];
+    _paymentWorkers = [];
     _supplierRequests = [];
   }
 
