@@ -50,8 +50,12 @@ class CashSyncStoreClient {
   static String _normalizeBaseUrl(String baseUrl) {
     final trimmed = baseUrl.trim();
     if (trimmed.isEmpty) {
-      return html.window.localStorage['THAVVU_CASH_API_BASE'] ??
-          'http://localhost:8787';
+      // Production builds never have a local sync server. The store stays
+      // disabled unless a dev explicitly opts in (dart-define at build time
+      // or localStorage override). Previously this defaulted to
+      // http://localhost:8787, which made deployed web apps fail every cash
+      // read with ERR_CONNECTION_REFUSED.
+      return html.window.localStorage['THAVVU_CASH_API_BASE'] ?? '';
     }
     return trimmed.endsWith('/')
         ? trimmed.substring(0, trimmed.length - 1)
