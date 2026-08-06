@@ -817,6 +817,44 @@ class _RentalScreenState extends State<RentalScreen>
   Future<void> _loadRentalData() async {
     await _loadRentalEntries();
     await _loadRentalPayments();
+    await _loadRentalTransfers();
+  }
+
+  /// Merges backend rental transfers into the local transfer history so the
+  /// History tab shows persisted transfers after restart.
+  Future<void> _loadRentalTransfers() async {
+    try {
+      final transfers = await _rentalRepo.fetchTransfers(siteId: _rentalSiteId);
+      if (!mounted) return;
+      setState(() {
+        for (final t in transfers) {
+          final exists =
+              _internalTransferHistory.any((h) => h.id == 'ITR-${t.id}');
+          if (exists) continue;
+          _internalTransferHistory.insert(
+            0,
+            InternalTransferHistoryRecord(
+              id: 'ITR-${t.id}',
+              date: t.workDate,
+              thavvuId: t.fromThavvuId ?? '',
+              toThavvuId: t.toThavvuId ?? '',
+              transferType: t.assetKind == 'workEquipment'
+                  ? 'Work Equipment'
+                  : 'Machine',
+              itemName: t.itemName,
+              batchId: '',
+              rentalId: t.transferNo,
+              numberOfItems: 1,
+              transferredTo: t.driver ?? 'Supervisor / Department',
+              photoPath: t.photoPath ?? '',
+              notes: t.notes ?? '',
+            ),
+          );
+        }
+      });
+    } catch (_) {
+      // Best-effort; local history still works.
+    }
   }
 
   Future<void> _loadRentalPayments() async {
@@ -2931,6 +2969,42 @@ class _RentalScreenState extends State<RentalScreen>
     );
   }
 
+  /// Best-effort persistence of an internal transfer to Supabase so the HOD
+  /// review queue sees it. Uses the repo's createTransfer (status submitted);
+  /// failures are surfaced but never block the local flow.
+  Future<void> _persistTransferToBackend({
+    required String assetKind,
+    required String itemName,
+    String? fromThavvuId,
+    String? toThavvuId,
+    String? driver,
+    String? photoPath,
+    String? notes,
+  }) async {
+    try {
+      await _rentalRepo.createTransfer(
+        siteId: _rentalSiteId,
+        transferNo: 'ITR-${DateTime.now().millisecondsSinceEpoch}',
+        assetKind: assetKind,
+        itemName: itemName,
+        fromThavvuId: fromThavvuId,
+        toThavvuId: toThavvuId,
+        driver: driver,
+        workDate: DateTime.now(),
+        photoPath: photoPath,
+        notes: notes,
+      );
+    } catch (e) {
+      debugPrint('_persistTransferToBackend failed: $e');
+      if (mounted) {
+        _showSnackbar(
+          'Transfer saved locally, but the HOD sync failed. Check connection.',
+          AppTheme.warning,
+        );
+      }
+    }
+  }
+
   void _submitWorkEquipmentTransfer() {
     final thavvuId = _selectedTransferThavvuId;
     final targetThavvu = _toTransferThavvuId;
@@ -2988,6 +3062,17 @@ class _RentalScreenState extends State<RentalScreen>
     final receiver = _transferReceiverController.text.trim().isEmpty
         ? 'Supervisor / Department'
         : _transferReceiverController.text.trim();
+
+    // Persist to Supabase so the HOD review queue sees this transfer.
+    unawaited(_persistTransferToBackend(
+      assetKind: 'workEquipment',
+      itemName: item.name,
+      fromThavvuId: thavvuId,
+      toThavvuId: targetThavvu,
+      driver: receiver,
+      photoPath: _workEquipmentPhotoPath ?? '',
+      notes: _workEquipmentNotesController.text.trim(),
+    ));
 
     setState(() {
       item.returnedQty = (item.returnedQty + qty).clamp(0, item.rentedQty);
@@ -3224,6 +3309,18 @@ class _RentalScreenState extends State<RentalScreen>
             notes: 'Machine selected from Active Rentals and transferred from $selectedThavvu to $targetThavvu for $receiver.',
           ),
         );
+
+        // Persist to Supabase so the HOD review queue sees this transfer.
+        unawaited(_persistTransferToBackend(
+          assetKind: 'material',
+          itemName: rental.item,
+          fromThavvuId: selectedThavvu,
+          toThavvuId: targetThavvu,
+          driver: receiver,
+          photoPath: _machineTransferPhotoPath ?? '',
+          notes:
+              'Machine selected from Active Rentals and transferred from $selectedThavvu to $targetThavvu for $receiver.',
+        ));
 
         _addSupplierPaymentItemForTransfer(transferItem);
       }

@@ -802,6 +802,7 @@ class RentalPayment {
   final String? proofPath;
   final String? note;
   final bool isDemo;
+  final DateTime? createdAt;
 
   const RentalPayment({
     required this.id,
@@ -813,6 +814,7 @@ class RentalPayment {
     this.proofPath,
     this.note,
     this.isDemo = false,
+    this.createdAt,
   });
 
   factory RentalPayment.fromJson(Map<String, dynamic> json) {
@@ -826,6 +828,7 @@ class RentalPayment {
       proofPath: json['proof_path'] as String?,
       note: json['note'] as String?,
       isDemo: json['is_demo'] == true,
+      createdAt: DateTime.tryParse(RentalRepository._string(json, 'created_at')),
     );
   }
 }

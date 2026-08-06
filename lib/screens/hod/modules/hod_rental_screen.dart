@@ -59,6 +59,7 @@ class _HodRentalScreenState extends State<HodRentalScreen>
     _hodSiteId = (siteId == null || siteId.isEmpty) ? 'SITE-VJA-001' : siteId;
     _rentalChannel = _rentalRepo.watchEntries(_hodSiteId, _loadServerRentals);
     await _loadServerRentals();
+    await _loadTransfersAndPayments();
   }
 
   Future<void> _loadServerRentals() async {
@@ -68,6 +69,80 @@ class _HodRentalScreenState extends State<HodRentalScreen>
       setState(() => _serverEntries = entries);
     } catch (_) {
       // Backend is best-effort; seeded demo data still works.
+    }
+  }
+
+  /// Replaces the seeded demo transfers/payments with the REAL rows the
+  /// supervisors submitted, so HOD review acts on live data.
+  Future<void> _loadTransfersAndPayments() async {
+    try {
+      final transfers = await _rentalRepo.fetchTransfers(siteId: _hodSiteId);
+      final payments = await _rentalRepo.fetchPayments(siteId: _hodSiteId);
+      if (!mounted) return;
+      setState(() {
+        _transfers
+          ..clear()
+          ..addAll(transfers.map((t) => HodTransferReview(
+                id: t.id,
+                date: t.workDate,
+                fromThavvuId: t.fromThavvuId ?? '',
+                toThavvuId: t.toThavvuId ?? '',
+                rentalId: t.transferNo,
+                itemName: t.itemName,
+                quantity: 1,
+                submittedBy: t.driver ?? 'Supervisor',
+                status: _mapTransferStatus(t.status),
+                photoPath: t.photoPath ?? '',
+                note: t.notes ?? '',
+              )));
+        _payments
+          ..clear()
+          ..addAll(payments.map((p) => HodPaymentReview(
+                id: p.id,
+                supplierName: p.supplierName,
+                rentalId: '',
+                itemName: '',
+                requestedAmount: p.amount,
+                method: p.mode,
+                requestedBy: 'Supervisor',
+                status: _mapPaymentStatus(p.status),
+                createdAt: p.createdAt ?? DateTime.now(),
+                note: p.note ?? '',
+              )));
+      });
+    } catch (e) {
+      debugPrint('_loadTransfersAndPayments failed: $e');
+      if (mounted) {
+        setState(() {
+          _transfers.clear();
+          _payments.clear();
+        });
+      }
+    }
+  }
+
+  HodTransferStatus _mapTransferStatus(String db) {
+    switch (db) {
+      case 'approved':
+        return HodTransferStatus.verified;
+      case 'rejected':
+        return HodTransferStatus.needsProof;
+      case 'closed':
+        return HodTransferStatus.verified;
+      default:
+        return HodTransferStatus.submitted;
+    }
+  }
+
+  HodPaymentStatus _mapPaymentStatus(String db) {
+    switch (db) {
+      case 'approved':
+      case 'paid':
+        return HodPaymentStatus.approved;
+      case 'rejected':
+        return HodPaymentStatus.rejected;
+      default:
+        return HodPaymentStatus.pending;
     }
   }
 
@@ -597,6 +672,22 @@ class _HodRentalScreenState extends State<HodRentalScreen>
       );
     });
 
+    // Persist the decision to Supabase (DB: approved/rejected; a revision
+    // is recorded as rejected with the revision note until a dedicated
+    // status exists).
+    final ok = await _rentalRepo.updatePaymentStatus(
+      paymentId: payment.id,
+      status: decision == HodPaymentStatus.approved
+          ? 'approved'
+          : 'rejected',
+      hodNote: note.trim(),
+    );
+    if (!ok && mounted) {
+      _showSnackBar('Payment decision failed to sync. Check connection.',
+          AppTheme.danger);
+      return;
+    }
+
     _showSnackBar('${payment.itemName} payment marked as ${decision.label}',
         _paymentStatusColor(decision));
   }
@@ -635,6 +726,18 @@ class _HodRentalScreenState extends State<HodRentalScreen>
         note: note.trim().isEmpty ? 'No note added.' : note.trim(),
       );
     });
+
+    // Persist the decision to Supabase (DB: approved/rejected).
+    final ok = await _rentalRepo.updateTransferStatus(
+      transferId: transfer.id,
+      status: decision == HodTransferStatus.verified ? 'approved' : 'rejected',
+      hodNote: note.trim(),
+    );
+    if (!ok && mounted) {
+      _showSnackBar('Transfer decision failed to sync. Check connection.',
+          AppTheme.danger);
+      return;
+    }
 
     _showSnackBar('Transfer ${transfer.id} marked as ${decision.label}',
         _transferStatusColor(decision));
