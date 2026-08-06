@@ -311,18 +311,24 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     super.dispose();
   }
 
-  void _updateWorkerStatus(String workerId, String newStatus) {
+  Future<void> _updateWorkerStatus(String workerId, String newStatus) async {
     setState(() {
       final index = _workers.indexWhere((w) => w.id == workerId);
       if (index != -1)
         _workers[index] = _workers[index].copyWith(status: newStatus);
     });
     // Persist so the leave/active status survives restarts and syncs.
-    _attendanceRepo.updateWorkerStatus(workerId, newStatus);
+    final ok = await _attendanceRepo.updateWorkerStatus(workerId, newStatus);
+    if (!ok) {
+      _showSnackbar(
+          'Worker status failed to sync. Check connection.', AppTheme.danger);
+      return;
+    }
     _showSnackbar('Worker status updated to $newStatus', AppTheme.success);
   }
 
-  void _updateOutsideWorkerStatus(String workerId, String newStatus) {
+  Future<void> _updateOutsideWorkerStatus(
+      String workerId, String newStatus) async {
     setState(() {
       final index = _outsideWorkers.indexWhere((w) => w.id == workerId);
       if (index != -1) {
@@ -330,28 +336,50 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             _outsideWorkers[index].copyWith(attendanceStatus: newStatus);
       }
     });
-    _attendanceRepo.updateBatchWorkerStatus(workerId, newStatus);
+    final ok =
+        await _attendanceRepo.updateBatchWorkerStatus(workerId, newStatus);
     _syncFoodRequests();
+    if (!ok) {
+      _showSnackbar(
+          'Worker status failed to sync. Check connection.', AppTheme.danger);
+      return;
+    }
     _showSnackbar(
         'Outside worker status updated to $newStatus', AppTheme.success);
   }
 
-  void _addOutsideWorkers(List<OutsideWorker> newWorkers, WorkerBatch batch) {
+  Future<void> _addOutsideWorkers(
+      List<OutsideWorker> newWorkers, WorkerBatch batch) async {
     setState(() {
       _outsideWorkers.addAll(newWorkers);
       _confirmedBatches.add(batch);
     });
-    _persistBatchToBackend(batch);
+    try {
+      await _persistBatchToBackend(batch);
+    } catch (e) {
+      debugPrint('_persistBatchToBackend failed: $e');
+      _showSnackbar(
+          'Batch saved locally, but sync to HOD failed. Check connection.',
+          AppTheme.warning);
+    }
   }
 
   void _refreshBatches() => setState(() {});
 
-  void _syncRegularAttendanceSnapshot(List<AttendanceWorkerProfile> snapshot) {
+  Future<void> _syncRegularAttendanceSnapshot(
+      List<AttendanceWorkerProfile> snapshot) async {
     if (!mounted) return;
     setState(() {
       _regularAttendanceSnapshot = List<AttendanceWorkerProfile>.from(snapshot);
     });
-    _persistSnapshotToBackend(snapshot);
+    try {
+      await _persistSnapshotToBackend(snapshot);
+    } catch (e) {
+      debugPrint('_persistSnapshotToBackend failed: $e');
+      _showSnackbar(
+          'Attendance saved locally, but sync to HOD failed. Check connection.',
+          AppTheme.warning);
+    }
   }
 
   void _syncPaymentSnapshot(List<PermanentWorkerPaymentAccount> snapshot) {
