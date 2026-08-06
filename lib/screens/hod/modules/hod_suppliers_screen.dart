@@ -1015,9 +1015,9 @@ class _HodSuppliersScreenState extends State<HodSuppliersScreen> {
     if (saved == null) return;
     _repo.upsertSupplier(saved);
     // Sync to the enterprise catalog so every supervisor sees it instantly.
-    unawaited(SupabaseSupplierRepository().upsertRaw({
+    final syncOk = await SupabaseSupplierRepository().upsertRaw({
       'id': saved.id,
-      'group_name': saved.group.name,
+      'group_name': saved.group.title,
       'name': saved.name,
       'contact_person': saved.contactPerson,
       'phone': saved.phone,
@@ -1036,7 +1036,7 @@ class _HodSuppliersScreenState extends State<HodSuppliersScreen> {
       'active': saved.active,
       'is_demo': false,
       'created_at': saved.createdAt.toUtc().toIso8601String(),
-    }));
+    });
     await _addHistory(
       module: saved.group.shortTitle,
       supplierName: saved.name,
@@ -1048,6 +1048,16 @@ class _HodSuppliersScreenState extends State<HodSuppliersScreen> {
     );
     await _loadAll();
     if (!mounted) return;
+    if (!syncOk) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Saved locally, but the Supabase sync failed. Check your connection and try again.',
+          ),
+        ),
+      );
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${saved.name} saved successfully')),
     );
@@ -1085,7 +1095,7 @@ class _HodSuppliersScreenState extends State<HodSuppliersScreen> {
     );
     if (confirmed != true) return;
     _repo.deleteSupplier(supplier.id);
-    unawaited(SupabaseSupplierRepository().deleteRaw(supplier.id));
+    final deleteOk = await SupabaseSupplierRepository().deleteRaw(supplier.id);
     await _addHistory(
       module: supplier.group.shortTitle,
       supplierName: supplier.name,
@@ -1096,6 +1106,16 @@ class _HodSuppliersScreenState extends State<HodSuppliersScreen> {
       notes: 'Deleted by HOD.',
     );
     await _loadAll();
+    if (!mounted) return;
+    if (!deleteOk) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Removed locally, but the Supabase delete failed. Check your connection and retry.',
+          ),
+        ),
+      );
+    }
   }
 
   // ─── Machine Log CRUD ──────────────────────────────────────────────

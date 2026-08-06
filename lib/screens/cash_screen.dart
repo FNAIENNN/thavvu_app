@@ -2435,7 +2435,7 @@ class _CashModuleScreenState extends State<CashModuleScreen>
       return;
     }
 
-    await _cashExpenseService.submitExpense(
+    final savedExpense = await _cashExpenseService.submitExpense(
       supervisorId: _currentSupervisorId,
       supervisorName: _currentSupervisorName,
       thavvuId: _selectedThavvuId!,
@@ -2464,15 +2464,18 @@ class _CashModuleScreenState extends State<CashModuleScreen>
     );
 
     // WRITE-THROUGH: persist this expense to Supabase cash_transactions so
-    // the HOD cash module and Reports see it. Best-effort; the local entry
-    // above is always kept and migrated if this fails.
+    // the HOD cash module and Reports see it. Uses the SAME txn_no the
+    // migrator generates (LOCAL-<expense.id>), so an already-synced expense
+    // is never written twice (the old CASH-<ts> code double-counted every
+    // expense on the HOD ledger). Failure is surfaced, not swallowed.
+    var writeThroughFailed = false;
     try {
       final proofPath = (_cashPayInvoiceBillPath ?? '').isEmpty
           ? _cashPayVehiclePhotoPath
           : _cashPayInvoiceBillPath;
       await _cashRepo.createTransaction(
         siteId: _cashSiteId,
-        txnNo: 'CASH-${DateTime.now().millisecondsSinceEpoch}',
+        txnNo: 'LOCAL-${savedExpense.id}',
         type: 'expense',
         amount: _cashPayItemsTotal,
         method: 'cash',
@@ -2483,9 +2486,17 @@ class _CashModuleScreenState extends State<CashModuleScreen>
       );
       // Refresh immediately so the summary reflects the new spend.
       await _loadCashTransactions();
-    } catch (_) {
-      // Offline / backend unavailable — local ledger is the fallback and
-      // will be migrated on the next successful load.
+    } catch (e) {
+      // Offline / backend unavailable — the local ledger keeps the entry
+      // and _migrateLocalExpensesToSupabase() pushes it on the next load.
+      writeThroughFailed = true;
+      debugPrint('cash write-through failed (will migrate later): $e');
+      if (mounted) {
+        _showSnackbar(
+          'Saved locally. Sync to HOD will retry automatically.',
+          AppTheme.warning,
+        );
+      }
     }
 
     await _loadSupervisorCashData();
@@ -2498,10 +2509,12 @@ class _CashModuleScreenState extends State<CashModuleScreen>
             '${_titleForCategory(_selectedCategory)} payment ₹${_cashPayItemsTotal.toStringAsFixed(0)} for $fullSummary.',
       ),
     );
-    _showSnackbar(
-      '${_titleForCategory(_selectedCategory)} payment submitted successfully!',
-      AppTheme.success,
-    );
+    if (!writeThroughFailed) {
+      _showSnackbar(
+        '${_titleForCategory(_selectedCategory)} payment submitted successfully!',
+        AppTheme.success,
+      );
+    }
     _clearCashPayForm();
   }
 
