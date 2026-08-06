@@ -366,36 +366,10 @@ class _DailyDataScreenState extends State<DailyDataScreen>
   // ── FIX 3: Single general bill upload — placed after Workers section ──
   String? _generalBillFileName;
 
-  // Payment transaction history
-  final List<PaymentTransaction> _cashTransactions = [
-    PaymentTransaction(
-      id: 'TXN-001',
-      type: 'cash',
-      amount: 5000,
-      method: 'Cash',
-      date: DateTime.now().subtract(const Duration(days: 2)),
-      note: 'Daily wages',
-    ),
-    PaymentTransaction(
-      id: 'TXN-002',
-      type: 'cash',
-      amount: 8000,
-      method: 'Cash',
-      date: DateTime.now().subtract(const Duration(days: 1)),
-      note: 'Material purchase',
-    ),
-  ];
-  final List<PaymentTransaction> _advanceTransactions = [
-    PaymentTransaction(
-      id: 'ADV-001',
-      type: 'advance',
-      amount: 15000,
-      method: 'UPI',
-      date: DateTime.now().subtract(const Duration(days: 3)),
-      status: 'Requested',
-      note: 'Operator advance',
-    ),
-  ];
+  // Payment transaction history — starts empty; only real transactions
+  // created during the session (and written through to Supabase) are shown.
+  final List<PaymentTransaction> _cashTransactions = [];
+  final List<PaymentTransaction> _advanceTransactions = [];
 
   final List<MachineLogRecord> _historyLogs = [];
 

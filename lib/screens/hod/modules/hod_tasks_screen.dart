@@ -11,9 +11,8 @@ import '../../../services/supabase_tasks_repository.dart';
 // "assign, monitor, review, approve, reject, and request revision".
 //
 // Backend note:
-// All lists below are in-memory demo data for frontend integration. Later,
-// replace these lists with TaskRepository / AlertRepository / FileStorageRepository
-// calls without changing the UI flow.
+// Task/checklist records and the supervisor roster load from Supabase via
+// SupabaseTasksRepository / the account RPCs (no demo data).
 
 // ── Enums and labels ───────────────────────────────────────────────────────
 
@@ -403,7 +402,6 @@ class _HodTasksScreenState extends State<HodTasksScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 7, vsync: this);
-    _seedAuditLogs();
     _loadSupervisors();
     _loadTasks();
   }
@@ -423,36 +421,6 @@ class _HodTasksScreenState extends State<HodTasksScreen>
     _checklistItemsController.dispose();
     _hodInstructionController.dispose();
     super.dispose();
-  }
-
-  void _seedAuditLogs() {
-    if (_auditLogs.isNotEmpty) return;
-    _auditLogs.addAll([
-      HodTaskAuditLog(
-        id: 'AUD-001',
-        taskId: 'TSK-002',
-        taskTitle: 'Update machine log for MCH-003',
-        date: DateTime.now().subtract(const Duration(days: 1)),
-        action: 'HOD Approved',
-        actorId: widget.hodId,
-        actorRole: 'HOD',
-        oldStatus: 'Pending Review',
-        newStatus: 'Approved',
-        note: 'Verified with photo proof.',
-      ),
-      HodTaskAuditLog(
-        id: 'AUD-002',
-        taskId: 'TSK-003',
-        taskTitle: 'Submit weekly stock summary',
-        date: DateTime.now().subtract(const Duration(hours: 5)),
-        action: 'Revision Requested',
-        actorId: widget.hodId,
-        actorRole: 'HOD',
-        oldStatus: 'Pending Review',
-        newStatus: 'Revision Requested',
-        note: 'Stock count mismatch. Recheck feed bags.',
-      ),
-    ]);
   }
 
   // ── Derived data ─────────────────────────────────────────────────────────

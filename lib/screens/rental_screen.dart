@@ -799,7 +799,7 @@ class _RentalScreenState extends State<RentalScreen>
       for (final type in VehicleBillingType.values)
         type: TextEditingController(text: _defaultVehicleUsage(type)),
     };
-    _loadMockData();
+    unawaited(_loadRealData());
     _seedSupplierPaymentItems();
     _seedVehicleSelections();
     _newSupplierController.addListener(() { /* optional */ });
@@ -975,738 +975,77 @@ class _RentalScreenState extends State<RentalScreen>
   // Mock data (unchanged)
   // =========================
 
-  void _loadMockData() {
+  /// Production loader. Demo mirror data was removed: these lists must
+  /// reflect only real Supabase data or real user actions, never fabricated
+  /// rentals/transfers/tools. Real entries/payments/transfers are merged by
+  /// [_loadRentalData] via the realtime channel; real catalogs come from the
+  /// `rental_catalogs` table.
+  Future<void> _loadRealData() async {
     _vehicleCatalog.clear();
     _aquaToolCatalog.clear();
     _vehicleEntries.clear();
+    _activeRentals.clear();
+    _closedRentals.clear();
+    _transferItems.clear();
 
-    _aquaToolCatalog.addAll([
-      const AquaRentalTool(
-        id: 'AQT-AP-001',
-        name: '2 HP Paddle Wheel Aerator',
-        category: 'Aeration',
-        district: 'Bhimavaram',
-        purpose: 'Shrimp pond oxygen support',
-        suggestedRate: 1450,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-002',
-        name: '1 HP Paddle Wheel Aerator',
-        category: 'Aeration',
-        district: 'Bhimavaram',
-        purpose: 'Small pond aeration',
-        suggestedRate: 950,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-003',
-        name: 'Diesel Water Pump 5 HP',
-        category: 'Pumping',
-        district: 'Krishna',
-        purpose: 'Water exchange and pond filling',
-        suggestedRate: 1800,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-004',
-        name: 'Submersible Sludge Pump',
-        category: 'Pumping',
-        district: 'Eluru',
-        purpose: 'Sludge removal after culture cycle',
-        suggestedRate: 1650,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-005',
-        name: 'DO Meter Kit',
-        category: 'Testing',
-        district: 'Nellore',
-        purpose: 'Dissolved oxygen testing',
-        suggestedRate: 450,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-006',
-        name: 'pH and Salinity Meter Kit',
-        category: 'Testing',
-        district: 'Kakinada',
-        purpose: 'Water quality verification',
-        suggestedRate: 500,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-007',
-        name: 'Drag Net / Seine Net',
-        category: 'Harvesting',
-        district: 'Machilipatnam',
-        purpose: 'Fish and shrimp harvest support',
-        suggestedRate: 1350,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-008',
-        name: 'Cast Net Set',
-        category: 'Harvesting',
-        district: 'Repalle',
-        purpose: 'Sampling and small harvest work',
-        suggestedRate: 650,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-009',
-        name: 'Feed Tray Set',
-        category: 'Feeding',
-        district: 'Amalapuram',
-        purpose: 'Feed checking in shrimp ponds',
-        suggestedRate: 350,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-010',
-        name: 'Automatic Feed Blower',
-        category: 'Feeding',
-        district: 'Bapatla',
-        purpose: 'Uniform feed distribution',
-        suggestedRate: 1200,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-011',
-        name: 'Portable Generator 7.5 kVA',
-        category: 'Power',
-        district: 'West Godavari',
-        purpose: 'Backup power for aerators',
-        suggestedRate: 2200,
-      ),
-      const AquaRentalTool(
-        id: 'AQT-AP-012',
-        name: 'Digital Weighing Scale',
-        category: 'Harvesting',
-        district: 'Narasapuram',
-        purpose: 'Harvest and feed weighing',
-        suggestedRate: 500,
-      ),
-    ]);
+    String? siteId;
+    try {
+      siteId = await _contextService.resolveSiteId();
+    } catch (_) {}
+    final resolvedSiteId =
+        (siteId == null || siteId.isEmpty) ? 'SITE-VJA-001' : siteId;
 
-    _activeRentals = [
-      RentalItem(
-        id: 'RNT-AP-2026-0034',
-        item: '2 HP Paddle Wheel Aerator',
-        startDate: DateTime(2026, 5, 20),
-        rate: 1450,
-        advance: 3000,
-        fuelConsumed: 850,
-        notes: 'Bhimavaram shrimp pond aeration support',
-        siteName: 'Bhimavaram Aqua Yard',
-        tankId: 'TNK-BVRM-11',
-        fieldLabel: 'Vannamei Field A',
-        operatorName: 'Ravi Kumar',
-        tankEntryDate: DateTime(2026, 5, 20),
-        isActivated: true,
-        activationDate: DateTime(2026, 5, 21),
-        dailyCheckIns: [
-          DailyCheckIn(
-              date: DateTime(2026, 5, 21),
-              note: 'Machine entered Tank 11 and activated.'),
-          DailyCheckIn(
-              date: DateTime(2026, 5, 22), note: 'Aerator running normally.'),
-          DailyCheckIn(
-              date: DateTime(2026, 5, 23), note: 'Morning shift completed.'),
-        ],
-        fuelLogs: [
-          MachineFuelLog(
-            id: 'FUL-BVRM-001',
-            date: DateTime(2026, 5, 21),
-            type: 'Activation fuel',
-            litres: 18,
-            amount: 850,
-            meterReading: 'Start 0001 hr',
-            notes: 'Fuel filled before machine activation.',
-          ),
-          MachineFuelLog(
-            id: 'FUL-BVRM-002',
-            date: DateTime(2026, 5, 23),
-            type: 'Shift-end check',
-            litres: 6,
-            amount: 290,
-            meterReading: 'After 18 hr',
-            notes: 'Fuel check after completed shift.',
-          ),
-        ],
-      ),
-      RentalItem(
-        id: 'RNT-AP-2026-0035',
-        item: 'Diesel Water Pump 5 HP',
-        startDate: DateTime(2026, 5, 25),
-        rate: 1800,
-        advance: 2500,
-        fuelConsumed: 1100,
-        notes: 'Krishna brackish pond water exchange',
-        siteName: 'Krishna Brackish Pond',
-        tankId: 'TNK-KRS-09',
-        fieldLabel: 'Water Exchange Line',
-        operatorName: 'Suresh Babu',
-        tankEntryDate: DateTime(2026, 5, 25),
-        isActivated: true,
-        activationDate: DateTime(2026, 5, 26),
-        dailyCheckIns: [
-          DailyCheckIn(
-              date: DateTime(2026, 5, 26),
-              note: 'Pump installed near exchange bay.'),
-          DailyCheckIn(
-              date: DateTime(2026, 5, 27), note: 'Second shift continued.'),
-          DailyCheckIn(
-              date: DateTime(2026, 5, 28), note: 'Outlet line checked.'),
-        ],
-        fuelLogs: [
-          MachineFuelLog(
-            id: 'FUL-KRS-001',
-            date: DateTime(2026, 5, 26),
-            type: 'Activation fuel',
-            litres: 22,
-            amount: 1100,
-            meterReading: 'Start 0000 hr',
-            notes: 'Diesel filled before pump activation.',
-          ),
-          MachineFuelLog(
-            id: 'FUL-KRS-002',
-            date: DateTime(2026, 5, 28),
-            type: 'Shift-end check',
-            litres: 9,
-            amount: 450,
-            meterReading: 'After 14 hr',
-            notes: 'Fuel checked after water exchange shift.',
-          ),
-        ],
-      ),
-      RentalItem(
-        id: 'RNT-AP-2026-0036',
-        item: 'DO Meter Kit',
-        startDate: DateTime(2026, 5, 28),
-        rate: 450,
-        advance: 500,
-        fuelConsumed: 0,
-        notes: 'Nellore water quality check',
-        siteName: 'Nellore Test Station',
-        tankId: 'TNK-NLR-44',
-        fieldLabel: 'Water Quality Block',
-        operatorName: 'Lab Assistant',
-        tankEntryDate: DateTime(2026, 5, 28),
-        isActivated: false,
-      ),
-      RentalItem(
-        id: 'RNT-AP-2026-0037',
-        item: 'Drag Net / Seine Net',
-        startDate: DateTime(2026, 5, 29),
-        rate: 1350,
-        advance: 1000,
-        fuelConsumed: 0,
-        notes: 'Machilipatnam harvest preparation',
-        siteName: 'Machilipatnam Harvest Point',
-        tankId: 'TNK-MTM-18',
-        fieldLabel: 'Harvest Field',
-        operatorName: 'Mahesh',
-        tankEntryDate: DateTime(2026, 5, 29),
-        isActivated: true,
-        activationDate: DateTime(2026, 5, 29),
-        dailyCheckIns: [
-          DailyCheckIn(
-              date: DateTime(2026, 5, 29),
-              note: 'Net issued for harvest trial.'),
-        ],
-      ),
-    ];
+    try {
+      final catalogs =
+          await _rentalRepo.fetchCatalogs(siteId: resolvedSiteId);
+      if (!mounted) return;
+      setState(() {
+        for (final c in catalogs) {
+          if (c.kind == 'tool') {
+            _aquaToolCatalog.add(AquaRentalTool(
+              id: c.id,
+              name: c.name,
+              category: 'Tooling',
+              district: '',
+              purpose: c.notes ?? c.name,
+              suggestedRate: c.ratePerUnit,
+            ));
+          } else {
+            final bt = _billingFromString(c.billingType);
+            if (bt != null) {
+              _vehicleCatalog.add(VehicleCatalogItem(
+                id: c.id,
+                name: c.name,
+                billingType: bt,
+                rate: c.ratePerUnit,
+                thavvuIds: c.thavvuIds,
+              ));
+            }
+          }
+        }
+      });
+      _seedVehicleSelections();
+    } catch (e) {
+      debugPrint('_loadRealData failed: $e');
+    }
+  }
 
-    _closedRentals = [
-      {
-        'id': 'RNT-AP-2026-0028',
-        'item': 'Portable Generator 7.5 kVA',
-        'startDate': '2026-05-01',
-        'endDate': '2026-05-07',
-        'period': '6 days',
-        'rate': 2200,
-        'advance': 5000,
-        'billing': 13200,
-        'balance': 8200,
-        'payment': 'Pending',
-        'status': 'Closed',
-      },
-      {
-        'id': 'RNT-AP-2026-0029',
-        'item': 'Feed Tray Set',
-        'startDate': '2026-05-08',
-        'endDate': '2026-05-15',
-        'period': '7 days',
-        'rate': 350,
-        'advance': 1000,
-        'billing': 2450,
-        'balance': 1450,
-        'payment': 'Completed',
-        'status': 'Closed',
-      },
-      {
-        'id': 'RNT-AP-2026-0030',
-        'item': 'pH and Salinity Meter Kit',
-        'startDate': '2026-05-12',
-        'endDate': '2026-05-17',
-        'period': '5 days',
-        'rate': 500,
-        'advance': 1000,
-        'billing': 2500,
-        'balance': 1500,
-        'payment': 'Completed',
-        'status': 'Closed',
-      },
-    ];
-
-    _transferItems = [
-      InternalTransferItem(
-        id: 'ITM-AP-001',
-        name: 'HDPE Aerator Float Set',
-        kind: TransferAssetKind.material,
-        batchId: 'MAT-BVRM-1001',
-        rentalId: 'RNT-AP-2026-0034',
-        rentedQty: 12,
-        returnedQty: 8,
-        thavvuIds: ['TP-VJA-001', 'TP-VJA-002'],
-        tankIds: ['TNK-BVRM-11', 'TNK-BVRM-12'],
-        location: const TransferLocation(
-          siteName: 'Bhimavaram Aqua Yard',
-          address: 'Shrimp pond cluster, West Godavari',
-          latitude: 16.5449,
-          longitude: 81.5212,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-002',
-        name: 'Aerator Paddle Blade Set',
-        kind: TransferAssetKind.material,
-        batchId: 'MAT-BVRM-1001',
-        rentalId: 'RNT-AP-2026-0034',
-        rentedQty: 24,
-        returnedQty: 24,
-        thavvuIds: ['TP-VJA-001'],
-        tankIds: ['TNK-BVRM-11'],
-        location: const TransferLocation(
-          siteName: 'Bhimavaram Aqua Yard',
-          address: 'Aerator storage bay',
-          latitude: 16.5480,
-          longitude: 81.5250,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-003',
-        name: 'PVC Air Hose Coil',
-        kind: TransferAssetKind.material,
-        batchId: 'MAT-KKD-1002',
-        rentalId: 'RNT-AP-2026-0036',
-        rentedQty: 15,
-        returnedQty: 5,
-        thavvuIds: ['TP-VJA-001', 'TP-VJA-002'],
-        tankIds: ['TNK-KKD-22'],
-        location: const TransferLocation(
-          siteName: 'Kakinada Pond Block',
-          address: 'Water testing shed, Kakinada',
-          latitude: 16.9891,
-          longitude: 82.2475,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-004',
-        name: 'Feed Tray Frames',
-        kind: TransferAssetKind.material,
-        batchId: 'MAT-AML-1003',
-        rentalId: 'RNT-AP-2026-0029',
-        rentedQty: 40,
-        returnedQty: 32,
-        thavvuIds: ['TP-VJA-001'],
-        tankIds: ['TNK-AML-31', 'TNK-AML-32'],
-        location: const TransferLocation(
-          siteName: 'Amalapuram Feed Yard',
-          address: 'Feed check storage, Konaseema',
-          latitude: 16.5787,
-          longitude: 82.0061,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-005',
-        name: 'Harvest Crates',
-        kind: TransferAssetKind.material,
-        batchId: 'MAT-MTM-1004',
-        rentalId: 'RNT-AP-2026-0037',
-        rentedQty: 60,
-        returnedQty: 20,
-        thavvuIds: ['TP-VJA-001', 'TP-VJA-002'],
-        tankIds: ['TNK-MTM-18'],
-        location: const TransferLocation(
-          siteName: 'Machilipatnam Harvest Point',
-          address: 'Landing and harvest lane',
-          latitude: 16.1809,
-          longitude: 81.1303,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-006',
-        name: '2 HP Paddle Wheel Aerator',
-        kind: TransferAssetKind.workEquipment,
-        batchId: 'WE-BVRM-2010',
-        rentalId: 'RNT-AP-2026-0034',
-        rentedQty: 4,
-        returnedQty: 2,
-        thavvuIds: ['TP-VJA-001'],
-        tankIds: ['TNK-BVRM-11', 'TNK-BVRM-12'],
-        location: const TransferLocation(
-          siteName: 'Bhimavaram Pond 12',
-          address: 'Vannamei culture pond',
-          latitude: 16.5408,
-          longitude: 81.5261,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-007',
-        name: 'Diesel Water Pump 5 HP',
-        kind: TransferAssetKind.workEquipment,
-        batchId: 'WE-KRS-2011',
-        rentalId: 'RNT-AP-2026-0035',
-        rentedQty: 2,
-        returnedQty: 0,
-        thavvuIds: ['TP-VJA-001', 'TP-VJA-002'],
-        tankIds: ['TNK-KRS-09'],
-        location: const TransferLocation(
-          siteName: 'Krishna Brackish Pond',
-          address: 'Water exchange pump bay',
-          latitude: 16.1800,
-          longitude: 81.1350,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-008',
-        name: 'DO Meter Kit',
-        kind: TransferAssetKind.workEquipment,
-        batchId: 'WE-NLR-2012',
-        rentalId: 'RNT-AP-2026-0036',
-        rentedQty: 3,
-        returnedQty: 3,
-        thavvuIds: ['TP-VJA-001'],
-        tankIds: ['TNK-NLR-44'],
-        location: const TransferLocation(
-          siteName: 'Nellore Test Station',
-          address: 'Shrimp pond water lab',
-          latitude: 14.4426,
-          longitude: 79.9865,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-009',
-        name: 'Drag Net / Seine Net',
-        kind: TransferAssetKind.workEquipment,
-        batchId: 'WE-MTM-2013',
-        rentalId: 'RNT-AP-2026-0037',
-        rentedQty: 2,
-        returnedQty: 1,
-        thavvuIds: ['TP-VJA-001'],
-        tankIds: ['TNK-MTM-18'],
-        location: const TransferLocation(
-          siteName: 'Machilipatnam Harvest Point',
-          address: 'Harvest loading area',
-          latitude: 16.1850,
-          longitude: 81.1362,
-        ),
-      ),
-      InternalTransferItem(
-        id: 'ITM-AP-010',
-        name: 'Portable Generator 7.5 kVA',
-        kind: TransferAssetKind.workEquipment,
-        batchId: 'WE-WG-2014',
-        rentalId: 'RNT-AP-2026-0028',
-        rentedQty: 1,
-        returnedQty: 0,
-        thavvuIds: ['TP-VJA-001'],
-        tankIds: ['TNK-WG-07'],
-        location: const TransferLocation(
-          siteName: 'West Godavari Backup Bay',
-          address: 'Aerator power support line',
-          latitude: 16.7107,
-          longitude: 81.0952,
-        ),
-      ),
-    ];
-
-    _vehicleCatalog.addAll([
-      const VehicleCatalogItem(
-        id: 'VH-HR-AP-01',
-        name: 'Mini Tractor with Pond Trailer',
-        billingType: VehicleBillingType.hourly,
-        rate: 750,
-        thavvuIds: ['TP-VJA-001', 'TP-VJA-002'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-HR-AP-02',
-        name: 'JCB Backhoe for Bund Repair',
-        billingType: VehicleBillingType.hourly,
-        rate: 2100,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-HR-AP-03',
-        name: 'Harvest Crane Support',
-        billingType: VehicleBillingType.hourly,
-        rate: 1850,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-WK-AP-01',
-        name: 'Aqua Service Pickup',
-        billingType: VehicleBillingType.weekly,
-        rate: 14500,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-WK-AP-02',
-        name: 'Diesel Bowser for Aerator Line',
-        billingType: VehicleBillingType.weekly,
-        rate: 26000,
-        thavvuIds: ['TP-VJA-001', 'TP-VJA-002'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-WK-AP-03',
-        name: 'Mobile Water Testing Van',
-        billingType: VehicleBillingType.weekly,
-        rate: 18000,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-TR-AP-01',
-        name: 'Feed Transport Lorry',
-        billingType: VehicleBillingType.trip,
-        rate: 4200,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-TR-AP-02',
-        name: 'Insulated Fish Transport Van',
-        billingType: VehicleBillingType.trip,
-        rate: 5600,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-TR-AP-03',
-        name: 'Shrimp Harvest Pickup',
-        billingType: VehicleBillingType.trip,
-        rate: 3600,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-KM-AP-01',
-        name: 'Aqua Technician Bike',
-        billingType: VehicleBillingType.km,
-        rate: 12,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-KM-AP-02',
-        name: 'Service Jeep',
-        billingType: VehicleBillingType.km,
-        rate: 28,
-        thavvuIds: ['TP-VJA-001'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-KM-AP-03',
-        name: 'Reefer Van',
-        billingType: VehicleBillingType.km,
-        rate: 42,
-        thavvuIds: ['TP-VJA-001', 'TP-VJA-002'],
-      ),
-      const VehicleCatalogItem(
-        id: 'VH-KM-AP-04',
-        name: 'Ice Box Pickup',
-        billingType: VehicleBillingType.km,
-        rate: 35,
-        thavvuIds: ['TP-VJA-002'],
-      ),
-    ]);
-
-    _vehicleEntries.addAll([
-      VehicleRentalEntry(
-        id: 'VRI-AP-001',
-        vehicleCatalogId: 'VH-HR-AP-01',
-        vehicleName: 'Mini Tractor with Pond Trailer',
-        billingType: VehicleBillingType.hourly,
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-BVRM-11',
-        fromLocation: 'Bhimavaram Aqua Yard',
-        toLocation: 'Pond 12 bund line',
-        driverOrOperator: 'Operator Ramesh',
-        workDate: DateTime(2026, 5, 29),
-        units: 6,
-        rate: 750,
-        fuelCost: 650,
-        driverBata: 300,
-        loadingCharge: 0,
-        status: 'Running',
-        notes: 'Aerator float shifting and bund material movement.',
-      ),
-      VehicleRentalEntry(
-        id: 'VRI-AP-002',
-        vehicleCatalogId: 'VH-HR-AP-02',
-        vehicleName: 'JCB Backhoe for Bund Repair',
-        billingType: VehicleBillingType.hourly,
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-KRS-09',
-        fromLocation: 'Krishna Brackish Pond',
-        toLocation: 'South bund repair point',
-        driverOrOperator: 'Operator Suresh',
-        workDate: DateTime(2026, 5, 28),
-        units: 4.5,
-        rate: 2100,
-        fuelCost: 1800,
-        driverBata: 500,
-        loadingCharge: 0,
-        status: 'Completed',
-        notes: 'Bund strengthening before water exchange.',
-      ),
-      VehicleRentalEntry(
-        id: 'VRI-AP-003',
-        vehicleCatalogId: 'VH-WK-AP-02',
-        vehicleName: 'Diesel Bowser for Aerator Line',
-        billingType: VehicleBillingType.weekly,
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-WG-07',
-        fromLocation: 'West Godavari Backup Bay',
-        toLocation: 'Pond cluster service route',
-        driverOrOperator: 'Driver Naresh',
-        workDate: DateTime(2026, 5, 24),
-        units: 1,
-        rate: 26000,
-        fuelCost: 0,
-        driverBata: 1500,
-        loadingCharge: 0,
-        status: 'Running',
-        notes: 'Weekly support for diesel-powered aerator backup.',
-      ),
-      VehicleRentalEntry(
-        id: 'VRI-AP-004',
-        vehicleCatalogId: 'VH-TR-AP-01',
-        vehicleName: 'Feed Transport Lorry',
-        billingType: VehicleBillingType.trip,
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-AML-31',
-        fromLocation: 'Amalapuram feed store',
-        toLocation: 'Konaseema shrimp pond block',
-        driverOrOperator: 'Driver Prasad',
-        workDate: DateTime(2026, 5, 27),
-        units: 2,
-        rate: 4200,
-        fuelCost: 1200,
-        driverBata: 700,
-        loadingCharge: 450,
-        status: 'Billing Pending',
-        notes: 'Feed bags transported in two trips.',
-      ),
-      VehicleRentalEntry(
-        id: 'VRI-AP-005',
-        vehicleCatalogId: 'VH-TR-AP-02',
-        vehicleName: 'Insulated Fish Transport Van',
-        billingType: VehicleBillingType.trip,
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-MTM-18',
-        fromLocation: 'Machilipatnam Harvest Point',
-        toLocation: 'Cold storage loading bay',
-        driverOrOperator: 'Driver Kiran',
-        workDate: DateTime(2026, 5, 29),
-        units: 1,
-        rate: 5600,
-        fuelCost: 900,
-        driverBata: 500,
-        loadingCharge: 600,
-        status: 'Completed',
-        notes: 'Harvest dispatch with insulated box support.',
-      ),
-      VehicleRentalEntry(
-        id: 'VRI-AP-006',
-        vehicleCatalogId: 'VH-KM-AP-02',
-        vehicleName: 'Service Jeep',
-        billingType: VehicleBillingType.km,
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-KKD-22',
-        fromLocation: 'Kakinada water testing shed',
-        toLocation: 'Pond inspection route',
-        driverOrOperator: 'Technician Ravi',
-        workDate: DateTime(2026, 5, 30),
-        units: 68,
-        rate: 28,
-        fuelCost: 0,
-        driverBata: 350,
-        loadingCharge: 0,
-        status: 'Running',
-        notes: 'Water quality kit movement and inspection.',
-      ),
-      VehicleRentalEntry(
-        id: 'VRI-AP-007',
-        vehicleCatalogId: 'VH-KM-AP-03',
-        vehicleName: 'Reefer Van',
-        billingType: VehicleBillingType.km,
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-MTM-18',
-        fromLocation: 'Machilipatnam Harvest Point',
-        toLocation: 'Vijayawada buyer pickup point',
-        driverOrOperator: 'Driver Mahesh',
-        workDate: DateTime(2026, 5, 30),
-        units: 82,
-        rate: 42,
-        fuelCost: 0,
-        driverBata: 650,
-        loadingCharge: 500,
-        status: 'Billing Pending',
-        notes: 'Cold-chain harvest transport.',
-      ),
-    ]);
-
-    _internalTransferHistory.addAll([
-      InternalTransferHistoryRecord(
-        id: 'ITH-REC-2026-001',
-        date: DateTime.now().subtract(const Duration(hours: 3)),
-        thavvuId: 'TP-VJA-001',
-        toThavvuId: 'TP-VJA-001',
-        transferType: 'Machine Equipment',
-        itemName: '2 HP Paddle Wheel Aerator',
-        batchId: 'BATCH-REC-101',
-        rentalId: 'RNT-AP-2026-0034',
-        numberOfItems: 2,
-        transferredTo: 'Current Supervisor',
-        submittedBy: 'Supervisor Suresh Kumar',
-        photoPath: 'transfer_aerator_001.jpg',
-        notes: 'Transferred 2 aerator units for pond 9 oxygen support. Checked and operational.',
-        status: 'Pending Receive',
-      ),
-      InternalTransferHistoryRecord(
-        id: 'ITH-REC-2026-002',
-        date: DateTime.now().subtract(const Duration(days: 1)),
-        thavvuId: 'TP-VJA-001',
-        toThavvuId: 'TP-VJA-001',
-        transferType: 'Work Equipment',
-        itemName: 'HDPE Aerator Float Set & PVC Hoses',
-        batchId: 'WE-BATCH-202',
-        rentalId: 'RNT-AP-2026-0035',
-        numberOfItems: 8,
-        transferredTo: 'Current Supervisor',
-        submittedBy: 'Supervisor Ramesh V.',
-        photoPath: 'transfer_floats_002.jpg',
-        notes: 'Float sets & hose bundle transferred after harvest completion.',
-        status: 'Pending Receive',
-      ),
-      InternalTransferHistoryRecord(
-        id: 'ITH-REC-2026-003',
-        date: DateTime.now().subtract(const Duration(days: 2)),
-        thavvuId: 'TP-VJA-002',
-        toThavvuId: 'TP-VJA-001',
-        transferType: 'Machine Equipment',
-        itemName: 'Diesel Water Pump 5 HP',
-        batchId: 'BATCH-REC-103',
-        rentalId: 'RNT-AP-2026-0036',
-        numberOfItems: 1,
-        transferredTo: 'Current Supervisor',
-        submittedBy: 'Supervisor Mahesh',
-        photoPath: 'transfer_pump_003.jpg',
-        notes: 'High volume pump transferred for pond filling cycle.',
-        status: 'Received',
-        receiverName: 'Supervisor (You)',
-        receivedDate: DateTime.now().subtract(const Duration(days: 1)),
-        receivedQty: 1,
-        receiverNotes: 'Received in excellent working condition. Deployed at Intake Bay.',
-      ),
-    ]);
+  /// Maps backend billing_type strings onto the UI billing enum. DAY is not
+  /// representable in [VehicleBillingType], so those rows are skipped rather
+  /// than mis-labelled.
+  VehicleBillingType? _billingFromString(String? s) {
+    switch (s) {
+      case 'HOUR':
+        return VehicleBillingType.hourly;
+      case 'WEEKLY':
+        return VehicleBillingType.weekly;
+      case 'TRIP':
+        return VehicleBillingType.trip;
+      case 'KM':
+        return VehicleBillingType.km;
+      default:
+        return null;
+    }
   }
 
   void _seedVehicleSelections() {

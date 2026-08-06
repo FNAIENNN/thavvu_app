@@ -717,31 +717,38 @@ class _CashModuleScreenState extends State<CashModuleScreen>
 
   Future<void> _loadSupervisorCashData() async {
     // PRIMARY: Supabase cash_allocations (what the HOD actually issues).
-    // The old local SharedPreferences store is only a fallback when the
-    // Supabase backend is unavailable (offline / not initialized).
+    // The old local SharedPreferences store is a fallback when Supabase is empty or unavailable.
     try {
       final uid = _currentUid;
       final allocations =
           await _cashRepo.fetchAllocations(siteId: _cashSiteId);
-      // Allocation targets the supervisor's profile; if none target this
-      // user, treat the site allocations as issued to the site.
       final mine = uid == null
           ? allocations
-          : allocations.where((a) => a.allocatedTo == uid).toList();
+          : allocations.where((a) {
+              final target = a.allocatedTo;
+              return target == null ||
+                  target == uid ||
+                  target == _currentSupervisorId ||
+                  target.isEmpty ||
+                  a.siteId == _cashSiteId;
+            }).toList();
       final effective = mine.isEmpty ? allocations : mine;
+
       if (!mounted) return;
-      setState(() {
-        _hodCashAllocations
-          ..clear()
-          ..addAll(effective.map(_toLegacyAllocation));
-        _totalCashIssued = effective.fold<double>(
-          0,
-          (sum, allocation) => sum + allocation.amount,
-        );
-      });
-      return;
-    } catch (_) {
-      // Supabase unavailable — fall back to the legacy local store.
+      if (effective.isNotEmpty) {
+        setState(() {
+          _hodCashAllocations
+            ..clear()
+            ..addAll(effective.map(_toLegacyAllocation));
+          _totalCashIssued = effective.fold<double>(
+            0,
+            (sum, allocation) => sum + allocation.amount,
+          );
+        });
+        return;
+      }
+    } catch (e) {
+      debugPrint('_loadSupervisorCashData Supabase error: $e');
     }
 
     try {
@@ -2483,8 +2490,8 @@ class _CashModuleScreenState extends State<CashModuleScreen>
       supervisorId: _currentSupervisorId,
       supervisorName: _currentSupervisorName,
       thavvuId: _selectedThavvuId!,
-      siteId: 'site_1',
-      siteName: 'Supervisor Cash Site',
+      siteId: _cashSiteId,
+      siteName: _cashSiteId,
       category: _selectedCategory,
       title: _titleForCategory(_selectedCategory),
       amount: _cashPayItemsTotal,

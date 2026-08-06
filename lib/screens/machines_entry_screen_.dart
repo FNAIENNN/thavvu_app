@@ -401,44 +401,9 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen>
 
   final List<VehicleDayRecord> _todayVehicleRecords = [];
 
-  final List<Map<String, dynamic>> _suppliers = [
-    {
-      'name': 'ABC Suppliers',
-      'type': 'permanent',
-      'validUntil': null,
-      'rating': 4.5
-    },
-    {
-      'name': 'XYZ Traders',
-      'type': 'permanent',
-      'validUntil': null,
-      'rating': 4.2
-    },
-    {
-      'name': 'Global Machinery',
-      'type': 'temporary',
-      'validUntil': '2026-12-31',
-      'rating': 3.8
-    },
-    {
-      'name': 'Local Parts Co.',
-      'type': 'temporary',
-      'validUntil': '2026-09-30',
-      'rating': 4.0
-    },
-    {
-      'name': 'Industrial Supplies',
-      'type': 'permanent',
-      'validUntil': null,
-      'rating': 4.7
-    },
-    {
-      'name': 'Metro Equipment',
-      'type': 'temporary',
-      'validUntil': '2026-10-15',
-      'rating': 3.5
-    },
-  ];
+  // Empty by default. Real HOD-created suppliers load from Supabase in
+  // [_loadHodManagedSuppliers]; nothing fabricated is shown.
+  final List<Map<String, dynamic>> _suppliers = [];
 
   final List<String> _vehicleTypes = [
     'Poclain',
@@ -586,41 +551,9 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen>
   }
 
   void _seedTodayRecords() {
-    final now = DateTime.now();
-    _todayVehicleRecords.addAll([
-      VehicleDayRecord(
-        id: 'REC-${now.millisecondsSinceEpoch}-1',
-        createdAt: now.subtract(const Duration(hours: 2)),
-        machine: _machines[0],
-        source: 'Supervisor Diesel Entry',
-        billingType: 'Hourly',
-        dieselInclusion: 'With diesel',
-        supplierName: 'ABC Suppliers',
-        dieselEntries: [
-          DieselEntry(
-            id: 'DIE-1',
-            fuelType: 'Diesel',
-            stockPoint: 'Main Depot',
-            liters: 35,
-            amount: 3400,
-            createdAt: now.subtract(const Duration(hours: 2)),
-            remarks: 'Morning work refill',
-          ),
-        ],
-      ),
-      VehicleDayRecord(
-        id: 'REC-${now.millisecondsSinceEpoch}-2',
-        createdAt: now.subtract(const Duration(hours: 1)),
-        machine: _machines[1],
-        source: 'HOD Machine Entry',
-        billingType: 'Daily',
-        dieselInclusion: 'Without diesel',
-        supplierName: 'XYZ Traders',
-        fairAmount: 8500,
-        advanceAmount: 2000,
-        notes: 'Pond bund work',
-      ),
-    ]);
+    // No demo records. Today's entries are created only by real supervisor /
+    // HOD actions (then persisted to machine_daily_logs). This method is
+    // retained to keep initState wiring stable but no longer fabricates data.
   }
 
   @override

@@ -66,9 +66,63 @@ class _HodRentalScreenState extends State<HodRentalScreen>
     try {
       final entries = await _rentalRepo.fetchEntries(siteId: _hodSiteId);
       if (!mounted) return;
-      setState(() => _serverEntries = entries);
-    } catch (_) {
-      // Backend is best-effort; seeded demo data still works.
+      setState(() {
+        _serverEntries = entries;
+        // Build the main rental list + review queue from REAL rows so HOD
+        // reviews live supervisor data, never demo records.
+        _rentals
+          ..clear()
+          ..addAll(entries.map((e) => HodRentalRecord(
+                id: e.id,
+                machineName: e.vehicleName,
+                supplierName: e.driver ?? 'Rental Supplier',
+                siteName: e.siteId,
+                supervisorName: e.driver ?? 'Supervisor',
+                thavvuId: e.thavvuId ?? 'THV-PT-001',
+                tankId: e.tankId ?? 'TNK-01',
+                quantity: e.units.toInt() > 0 ? e.units.toInt() : 1,
+                activeQuantity: e.units.toInt() > 0 ? e.units.toInt() : 1,
+                ratePerDay: e.rate,
+                advancePaid: e.totalAmount > 0 ? e.totalAmount * 0.2 : 0,
+                fuelAmount: e.fuelCost,
+                startDate: e.workDate,
+                lastCheckIn: e.workDate,
+                status: e.status == 'closed'
+                    ? HodRentalStatus.closed
+                    : (e.status == 'active' ||
+                            e.status == 'approved' ||
+                            e.status == 'running'
+                        ? HodRentalStatus.active
+                        : HodRentalStatus.atSite),
+                priority: HodPriority.normal,
+                openingPhotoUploaded: e.openingPhotoPath != null &&
+                    e.openingPhotoPath!.isNotEmpty,
+                billPhotoUploaded:
+                    e.billPhotoPath != null && e.billPhotoPath!.isNotEmpty,
+                closingProofUploaded: false,
+                note: e.notes ?? '',
+              )));
+        _approvals
+          ..clear()
+          ..addAll(entries
+              .where((e) => e.status == 'submitted' || e.status == 'pending')
+              .map((e) => HodRentalApproval(
+                    id: 'APP-${e.id}',
+                    rentalId: e.id,
+                    title: e.vehicleName,
+                    requestedBy: e.driver ?? 'Supervisor',
+                    siteName: e.siteId,
+                    amount: e.totalAmount,
+                    priority: HodPriority.normal,
+                    status: HodReviewStatus.pending,
+                    createdAt: e.workDate,
+                    description: e.notes ?? e.vehicleName,
+                    proofSummary:
+                        '${e.vehicleName} · ${e.billingType} · ${e.units} units',
+                  )));
+      });
+    } catch (e) {
+      debugPrint('_loadServerRentals failed: $e');
     }
   }
 
@@ -160,247 +214,8 @@ class _HodRentalScreenState extends State<HodRentalScreen>
   }
 
   void _seedDemoData() {
-    final now = DateTime.now();
-
-    _rentals.addAll([
-      HodRentalRecord(
-        id: 'RNT-AP-2026-0034',
-        machineName: '2 HP Paddle Wheel Aerator',
-        supplierName: 'Bhimavaram Machine Rentals',
-        siteName: 'Bhimavaram Aqua Yard',
-        supervisorName: 'Supervisor Rajesh',
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-BVRM-11',
-        quantity: 4,
-        activeQuantity: 2,
-        ratePerDay: 1450,
-        advancePaid: 3000,
-        fuelAmount: 1140,
-        startDate: now.subtract(const Duration(days: 8)),
-        lastCheckIn: now.subtract(const Duration(hours: 4)),
-        status: HodRentalStatus.active,
-        priority: HodPriority.high,
-        openingPhotoUploaded: true,
-        billPhotoUploaded: true,
-        closingProofUploaded: false,
-        note: 'High runtime aerator. Continue monitoring oxygen support.',
-      ),
-      HodRentalRecord(
-        id: 'RNT-AP-2026-0035',
-        machineName: 'Diesel Water Pump 5 HP',
-        supplierName: 'Delta Work Equipment',
-        siteName: 'Krishna Brackish Pond',
-        supervisorName: 'Supervisor Kumar',
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-KRS-09',
-        quantity: 2,
-        activeQuantity: 2,
-        ratePerDay: 1800,
-        advancePaid: 2500,
-        fuelAmount: 1550,
-        startDate: now.subtract(const Duration(days: 6)),
-        lastCheckIn: now.subtract(const Duration(days: 1, hours: 2)),
-        status: HodRentalStatus.active,
-        priority: HodPriority.normal,
-        openingPhotoUploaded: true,
-        billPhotoUploaded: true,
-        closingProofUploaded: false,
-        note: 'Water exchange ongoing. Check-in is slightly delayed.',
-      ),
-      HodRentalRecord(
-        id: 'RNT-AP-2026-0036',
-        machineName: 'DO Meter Kit',
-        supplierName: 'AP Aqua Tools & Motors',
-        siteName: 'Nellore Test Station',
-        supervisorName: 'Lab Assistant',
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-NLR-44',
-        quantity: 3,
-        activeQuantity: 0,
-        ratePerDay: 450,
-        advancePaid: 500,
-        fuelAmount: 0,
-        startDate: now.subtract(const Duration(days: 3)),
-        lastCheckIn: null,
-        status: HodRentalStatus.atSite,
-        priority: HodPriority.low,
-        openingPhotoUploaded: true,
-        billPhotoUploaded: false,
-        closingProofUploaded: false,
-        note: 'At site but not activated. Bill photo is missing.',
-      ),
-      HodRentalRecord(
-        id: 'RNT-AP-2026-0028',
-        machineName: 'Portable Generator 7.5 kVA',
-        supplierName: 'West Godavari Power Rentals',
-        siteName: 'West Godavari Backup Bay',
-        supervisorName: 'Supervisor Mahesh',
-        thavvuId: 'TP-VJA-001',
-        tankId: 'TNK-WG-07',
-        quantity: 1,
-        activeQuantity: 0,
-        ratePerDay: 2200,
-        advancePaid: 5000,
-        fuelAmount: 2100,
-        startDate: now.subtract(const Duration(days: 20)),
-        closeDate: now.subtract(const Duration(days: 3)),
-        lastCheckIn: now.subtract(const Duration(days: 4)),
-        status: HodRentalStatus.closed,
-        priority: HodPriority.normal,
-        openingPhotoUploaded: true,
-        billPhotoUploaded: true,
-        closingProofUploaded: true,
-        note: 'Closed rental. Balance payment pending review.',
-      ),
-    ]);
-
-    _approvals.addAll([
-      HodRentalApproval(
-        id: 'REN-REV-001',
-        rentalId: 'RNT-AP-2026-0034',
-        title: 'Approve aerator continuation',
-        requestedBy: 'Supervisor Rajesh',
-        siteName: 'Bhimavaram Aqua Yard',
-        amount: 11600,
-        priority: HodPriority.high,
-        status: HodReviewStatus.pending,
-        createdAt: now.subtract(const Duration(hours: 5)),
-        description: 'Aerator needs one more shift because DO level is unstable.',
-        proofSummary: 'Opening photo, bill photo, and daily check-ins available.',
-      ),
-      HodRentalApproval(
-        id: 'REN-REV-002',
-        rentalId: 'RNT-AP-2026-0035',
-        title: 'Fuel log correction',
-        requestedBy: 'Supervisor Kumar',
-        siteName: 'Krishna Brackish Pond',
-        amount: 450,
-        priority: HodPriority.normal,
-        status: HodReviewStatus.pending,
-        createdAt: now.subtract(const Duration(hours: 3)),
-        description: 'Supervisor corrected shift-end fuel amount.',
-        proofSummary: 'Fuel note, meter reading, and machine photo attached.',
-      ),
-      HodRentalApproval(
-        id: 'REN-REV-003',
-        rentalId: 'RNT-AP-2026-0028',
-        title: 'Generator closure balance',
-        requestedBy: 'Supervisor Mahesh',
-        siteName: 'West Godavari Backup Bay',
-        amount: 8200,
-        priority: HodPriority.normal,
-        status: HodReviewStatus.revisionRequested,
-        createdAt: now.subtract(const Duration(days: 1)),
-        description: 'Supplier requested final balance after closure.',
-        proofSummary: 'Closing proof uploaded but clarity is low.',
-        hodNote: 'Upload clearer closing proof before payment release.',
-      ),
-    ]);
-
-    _transfers.addAll([
-      HodTransferReview(
-        id: 'ITR-REN-001',
-        date: now.subtract(const Duration(hours: 7)),
-        fromThavvuId: 'TP-VJA-001',
-        toThavvuId: 'TP-VJA-002',
-        rentalId: 'RNT-AP-2026-0034',
-        itemName: '2 HP Paddle Wheel Aerator',
-        quantity: 1,
-        submittedBy: 'Supervisor Rajesh',
-        status: HodTransferStatus.submitted,
-        photoPath: 'photo_ITR_001.jpg',
-        note: 'One aerator moved to adjacent pond line.',
-      ),
-      HodTransferReview(
-        id: 'ITR-REN-002',
-        date: now.subtract(const Duration(days: 1)),
-        fromThavvuId: 'TP-VJA-001',
-        toThavvuId: 'TP-VJA-002',
-        rentalId: 'RNT-AP-2026-0035',
-        itemName: 'Diesel Water Pump 5 HP',
-        quantity: 1,
-        submittedBy: 'Supervisor Kumar',
-        status: HodTransferStatus.verified,
-        photoPath: 'photo_ITR_002.jpg',
-        note: 'Pump moved for water exchange line.',
-      ),
-      HodTransferReview(
-        id: 'ITR-REN-003',
-        date: now.subtract(const Duration(days: 2)),
-        fromThavvuId: 'TP-VJA-001',
-        toThavvuId: 'TP-VJA-002',
-        rentalId: 'RNT-AP-2026-0037',
-        itemName: 'Drag Net / Seine Net',
-        quantity: 1,
-        submittedBy: 'Supervisor Mahesh',
-        status: HodTransferStatus.needsProof,
-        photoPath: '',
-        note: 'Photo proof missing.',
-      ),
-    ]);
-
-    _payments.addAll([
-      HodPaymentReview(
-        id: 'PAY-REN-001',
-        supplierName: 'Bhimavaram Machine Rentals',
-        rentalId: 'RNT-AP-2026-0034',
-        itemName: '2 HP Paddle Wheel Aerator',
-        requestedAmount: 11600,
-        approvedAmount: 0,
-        method: 'Bank Transfer',
-        requestedBy: 'Supervisor Rajesh',
-        status: HodPaymentStatus.pending,
-        createdAt: now.subtract(const Duration(hours: 4)),
-        note: 'Continuation payment request for aerator.',
-      ),
-      HodPaymentReview(
-        id: 'PAY-REN-002',
-        supplierName: 'Delta Work Equipment',
-        rentalId: 'RNT-AP-2026-0035',
-        itemName: 'Diesel Water Pump 5 HP',
-        requestedAmount: 10800,
-        approvedAmount: 0,
-        method: 'UPI',
-        requestedBy: 'Supervisor Kumar',
-        status: HodPaymentStatus.pending,
-        createdAt: now.subtract(const Duration(hours: 8)),
-        note: 'Pump running amount for current work period.',
-      ),
-      HodPaymentReview(
-        id: 'PAY-REN-003',
-        supplierName: 'West Godavari Power Rentals',
-        rentalId: 'RNT-AP-2026-0028',
-        itemName: 'Portable Generator 7.5 kVA',
-        requestedAmount: 8200,
-        approvedAmount: 0,
-        method: 'Bank Transfer',
-        requestedBy: 'Supervisor Mahesh',
-        status: HodPaymentStatus.revisionRequested,
-        createdAt: now.subtract(const Duration(days: 1)),
-        note: 'Waiting for better closing proof.',
-      ),
-    ]);
-
-    _auditLogs.addAll([
-      HodAuditLog(
-        id: 'AUD-001',
-        date: now.subtract(const Duration(hours: 2)),
-        action: 'Revision requested',
-        module: 'Payment Review',
-        itemId: 'PAY-REN-003',
-        actor: 'HOD-001',
-        note: 'Requested clearer closing proof.',
-      ),
-      HodAuditLog(
-        id: 'AUD-002',
-        date: now.subtract(const Duration(days: 1)),
-        action: 'Transfer verified',
-        module: 'Internal Transfer',
-        itemId: 'ITR-REN-002',
-        actor: 'HOD-001',
-        note: 'Verified pump movement with photo proof.',
-      ),
-    ]);
+    // No demo records. Real HOD rental approvals/records load from Supabase
+    // in [_initServerRentals] / [_loadServerRentals]; nothing fabricated.
   }
 
   String get _query => _searchController.text.trim().toLowerCase();
