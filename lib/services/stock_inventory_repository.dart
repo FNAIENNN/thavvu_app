@@ -340,17 +340,8 @@ class StockInventoryRepository {
 
   // ═══════════════════════════════════════════════════════════════════════
   // ORDERS (placed by HOD, received by supervisor)
+  // (fetchOrders is declared above with optional thavvuPointId/stockPointId params)
   // ═══════════════════════════════════════════════════════════════════════
-
-  Future<List<StockOrder>> fetchOrders() async {
-    final response = await _client
-        .from(ordersTable)
-        .select()
-        .order('created_at', ascending: false);
-    return (response as List)
-        .map((row) => StockOrder.fromJson(_asMap(row)))
-        .toList();
-  }
 
   /// HOD places ONE order with MULTIPLE items at once. Every line becomes a
   /// stock_orders row sharing the same order_no (an order group), inserted
