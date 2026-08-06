@@ -9,6 +9,7 @@ import '../services/cash_allocation_service.dart';
 import '../services/attendance_context_service.dart';
 import '../services/cash_repository.dart' as cash_repo;
 import '../services/hod_site_workspace_service.dart';
+import '../services/pending_writes_store.dart';
 import '../services/supervisor_cash_expense_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/collapsible_tab_scaffold.dart';
@@ -640,8 +641,51 @@ class _CashModuleScreenState extends State<CashModuleScreen>
   }
 
   Future<void> _bootstrapSupervisorCash() async {
+    await _drainPendingFinanceRequests();
     await _resolveCurrentSupervisor();
     await _loadSupervisorCashData();
+  }
+
+  /// Replays offline finance requests against Supabase before loading.
+  /// Idempotent: request_no is unique, so an already-inserted row simply
+  /// fails the unique index and is treated as synced.
+  Future<void> _drainPendingFinanceRequests() async {
+    final entries = await PendingWritesStore.instance.all();
+    for (final entry in entries) {
+      if (entry['kind']?.toString() != 'finance_request') continue;
+      final id = entry['id']?.toString() ?? '';
+      final payload =
+          Map<String, dynamic>.from(entry['payload'] as Map? ?? const {});
+      try {
+        final items = payload['items'];
+        await _cashRepo.createFinanceRequest(
+          siteId: payload['siteId']?.toString() ?? _cashSiteId,
+          requestNo: payload['requestNo']?.toString() ?? '',
+          thavvuPointId: payload['thavvuPointId']?.toString(),
+          type: payload['type']?.toString() ?? 'expense',
+          amount: (payload['amount'] as num?)?.toDouble() ?? 0,
+          category: payload['category']?.toString(),
+          reason: payload['reason']?.toString(),
+          paymentMethod: payload['paymentMethod']?.toString() ?? 'upi',
+          items: items is List
+              ? items
+                  .map((e) => Map<String, dynamic>.from(e as Map))
+                  .toList()
+              : const [],
+          proofPath: payload['proofPath']?.toString(),
+          voicePath: payload['voicePath']?.toString(),
+        );
+        await PendingWritesStore.instance.remove(id);
+      } catch (e) {
+        // Unique-constraint hit means it already synced — drop the queue.
+        final msg = e.toString();
+        if (msg.contains('23505') || msg.contains('duplicate')) {
+          await PendingWritesStore.instance.remove(id);
+        } else {
+          debugPrint('drain finance request failed ($id): $e');
+        }
+      }
+    }
   }
 
   Future<void> _resolveCurrentSupervisor() async {
@@ -2764,10 +2808,11 @@ class _CashModuleScreenState extends State<CashModuleScreen>
 
     // WRITE-THROUGH to Supabase so the HOD review queue sees the request.
     // (Previously this was local-only; HOD never saw finance requests.)
+    final requestNo = 'REQ-${DateTime.now().millisecondsSinceEpoch}';
     try {
       await _cashRepo.createFinanceRequest(
         siteId: _cashSiteId,
-        requestNo: 'REQ-${DateTime.now().millisecondsSinceEpoch}',
+        requestNo: requestNo,
         thavvuPointId: _requestSelectedThavvuId,
         type: _requestSelectedCategory,
         amount: amount,
@@ -2788,9 +2833,35 @@ class _CashModuleScreenState extends State<CashModuleScreen>
       );
     } catch (e) {
       debugPrint('finance request write-through failed: $e');
+      // Queue for retry so HOD still receives it when back online.
+      await PendingWritesStore.instance.enqueue(
+        id: 'req-$requestNo',
+        kind: 'finance_request',
+        payload: {
+          'requestNo': requestNo,
+          'siteId': _cashSiteId,
+          'thavvuPointId': _requestSelectedThavvuId,
+          'type': _requestSelectedCategory,
+          'amount': amount,
+          'category': _requestSelectedCategory,
+          'reason': request.reason,
+          'paymentMethod': _requestPaymentMethod == 'upi' ? 'upi' : 'bank',
+          'items': items
+              .map((i) => {
+                    'name': i.name,
+                    'quantity': i.quantity,
+                    'amount': i.amount,
+                  })
+              .toList(),
+          'proofPath': (_requestPhotoPath ?? '').isEmpty
+              ? _requestInvoiceBillPath
+              : _requestPhotoPath,
+          'voicePath': _requestVoicePath,
+        },
+      );
       if (mounted) {
         _showSnackbar(
-          'Request saved locally, but sync to HOD failed. Check connection.',
+          'Request saved locally. Sync to HOD will retry automatically.',
           AppTheme.warning,
         );
       }

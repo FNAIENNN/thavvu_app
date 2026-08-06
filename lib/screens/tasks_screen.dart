@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import '../services/auth_service.dart';
 import '../services/attendance_context_service.dart';
 import '../services/hod_site_workspace_service.dart';
+import '../services/pending_writes_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/collapsible_tab_scaffold.dart';
 import '../services/supabase_tasks_repository.dart';
@@ -331,12 +332,49 @@ class _TasksScreenState extends State<TasksScreen>
   }
 
   Future<void> _loadTasks() async {
+    await _drainPendingTaskWrites();
     final supervisorId = await _resolveSupervisorId();
     final records = await _tasksRepo.fetchSupervisorTasks(supervisorId);
     setState(() {
       _tasks.clear();
       _tasks.addAll(records);
     });
+  }
+
+  /// Replays offline task writes (status toggles, step checks, submissions)
+  /// against Supabase before loading. Idempotent per operation id.
+  Future<void> _drainPendingTaskWrites() async {
+    final entries = await PendingWritesStore.instance.all();
+    for (final entry in entries) {
+      final id = entry['id']?.toString() ?? '';
+      final kind = entry['kind']?.toString() ?? '';
+      final payload =
+          Map<String, dynamic>.from(entry['payload'] as Map? ?? const {});
+      var ok = false;
+      try {
+        if (kind == 'task_status') {
+          final taskId = payload['taskId']?.toString() ?? '';
+          final statusName = payload['status']?.toString() ?? '';
+          final status = SupervisorTaskStatus.values.asNameMap()[statusName];
+          if (taskId.isNotEmpty && status != null) {
+            ok = await _tasksRepo.updateTaskStatus(taskId, status);
+          }
+        } else if (kind == 'task_step') {
+          final taskId = payload['taskId']?.toString() ?? '';
+          final stepId = payload['stepId']?.toString() ?? '';
+          final isDone = payload['isDone'] == true;
+          if (taskId.isNotEmpty && stepId.isNotEmpty) {
+            ok = await _tasksRepo.updateTaskStepCompletion(
+                taskId, stepId, isDone);
+          }
+        }
+      } catch (e) {
+        debugPrint('drain task write failed ($id): $e');
+      }
+      if (ok) {
+        await PendingWritesStore.instance.remove(id);
+      }
+    }
   }
 
   /// Resolves the signed-in supervisor's employee code from the profiles
@@ -444,8 +482,13 @@ class _TasksScreenState extends State<TasksScreen>
     final ok = await _tasksRepo.updateTaskStatus(task.id, newStatus);
     if (!ok) {
       if (mounted) setState(() => task.status = previous);
+      await PendingWritesStore.instance.enqueue(
+        id: 'task-${task.id}',
+        kind: 'task_status',
+        payload: {'taskId': task.id, 'status': newStatus.name},
+      );
       _showSnackbar(
-        'Failed to save task status. Check your connection and retry.',
+        'Failed to save task status. It will sync when you are back online.',
         AppTheme.danger,
       );
       return;
@@ -485,8 +528,17 @@ class _TasksScreenState extends State<TasksScreen>
           _recomputeTaskStatusFromSteps(task);
         });
       }
+      await PendingWritesStore.instance.enqueue(
+        id: 'step-${task.id}-${step.id}',
+        kind: 'task_step',
+        payload: {
+          'taskId': task.id,
+          'stepId': step.id,
+          'isDone': !previous,
+        },
+      );
       _showSnackbar(
-        'Failed to save step. Check your connection and retry.',
+        'Failed to save step. It will sync when you are back online.',
         AppTheme.danger,
       );
       return;
@@ -544,8 +596,13 @@ class _TasksScreenState extends State<TasksScreen>
     final ok =
         await _tasksRepo.updateTaskStatus(task.id, SupervisorTaskStatus.submitted);
     if (!ok) {
+      await PendingWritesStore.instance.enqueue(
+        id: 'task-${task.id}-submitted',
+        kind: 'task_status',
+        payload: {'taskId': task.id, 'status': SupervisorTaskStatus.submitted.name},
+      );
       _showSnackbar(
-        'Failed to submit task. Check your connection and retry.',
+        'Failed to submit task. It will sync when you are back online.',
         AppTheme.danger,
       );
       return;

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config/supabase_config.dart';
 import 'screens/splash_screen.dart';
+import 'services/connectivity_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +25,11 @@ class ThavvuSupervisorApp extends StatelessWidget {
     return MaterialApp(
       title: 'Thavvu Supervisor',
       debugShowCheckedModeBanner: false,
+      // App-wide offline banner (renders nothing while online).
+      builder: (context, child) => ConnectivityBanner(
+        service: ConnectivityService.instance,
+        child: child ?? const SizedBox.shrink(),
+      ),
       theme: ThemeData(
         useMaterial3: false,
         primaryColor: const Color(0xFF1565C0),
