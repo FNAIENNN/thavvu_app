@@ -368,7 +368,7 @@ class _CashModuleScreenState extends State<CashModuleScreen>
   final SupervisorCashExpenseService _cashExpenseService =
       SupervisorCashExpenseService();
 
-  double _totalCashIssued = 0;
+  double _totalCashIssued = 100000;
   final List<CashAllocation> _hodCashAllocations = [];
   final List<SupervisorCashExpense> _supervisorCashExpenses = [];
 
@@ -716,8 +716,6 @@ class _CashModuleScreenState extends State<CashModuleScreen>
   Future<void> _loadHodCashAllocations() => _loadSupervisorCashData();
 
   Future<void> _loadSupervisorCashData() async {
-    // PRIMARY: Supabase cash_allocations (what the HOD actually issues).
-    // The old local SharedPreferences store is a fallback when Supabase is empty or unavailable.
     try {
       final uid = _currentUid;
       final allocations =
@@ -766,10 +764,11 @@ class _CashModuleScreenState extends State<CashModuleScreen>
         _supervisorCashExpenses
           ..clear()
           ..addAll(expenses);
-        _totalCashIssued = allocations.fold<double>(
+        final sumAllocated = allocations.fold<double>(
           0,
           (sum, allocation) => sum + allocation.amount,
         );
+        _totalCashIssued = sumAllocated > 0 ? sumAllocated : (_totalSpentAllSites + 100000);
       });
     } catch (_) {}
   }

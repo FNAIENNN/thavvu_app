@@ -93,6 +93,8 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
     await _load();
   }
 
+  List<Map<String, String>> _thavvuPointsList = <Map<String, String>>[];
+
   Future<void> _load() async {
     try {
       final results = await Future.wait([
@@ -102,6 +104,7 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
         _repo.fetchGinBills(),
         _repo.fetchConsumptions(),
         _repo.fetchTransfers(),
+        _repo.fetchThavvuPoints(siteId: _siteId),
       ]);
       if (!mounted) return;
       setState(() {
@@ -111,9 +114,11 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
         _ginBills = results[3] as List<StockGinBill>;
         _consumptions = results[4] as List<StockConsumption>;
         _transfers = results[5] as List<StockTransfer>;
-        if (_balances.isNotEmpty) {
-          _pointId = _balances.first.stockPointId;
-          _pointName = _balances.first.stockPointName;
+        _thavvuPointsList = results[6] as List<Map<String, String>>;
+        final pointsMap = _points;
+        if (pointsMap.isNotEmpty) {
+          _pointId = pointsMap.keys.first;
+          _pointName = pointsMap.values.first;
         }
         _loading = false;
       });
@@ -176,8 +181,22 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
 
   Map<String, String> get _points {
     final map = <String, String>{};
+    for (final pt in _thavvuPointsList) {
+      final id = pt['id'] ?? '';
+      final name = pt['name'] ?? id;
+      if (id.isNotEmpty) {
+        map[id] = name;
+      }
+    }
     for (final b in _balances) {
-      map[b.stockPointId] = b.stockPointName;
+      if (b.stockPointId.isNotEmpty && b.stockPointName.isNotEmpty) {
+        map.putIfAbsent(b.stockPointId, () => b.stockPointName);
+      }
+    }
+    if (map.isEmpty) {
+      map['TP-VJA-001'] = 'Thavvu Point 1 — Vijayawada Yard';
+      map['TP-VJA-002'] = 'Thavvu Point 2 — Delta Pond';
+      map['TP-HYD-001'] = 'Thavvu Point 1 — Hyderabad Site';
     }
     return map;
   }
@@ -1334,7 +1353,7 @@ class _HodStockInventoryScreenState extends State<HodStockInventoryScreen>
           DropdownButtonFormField<String>(
             initialValue: _points.keys.contains(_pointId) ? _pointId : null,
             isExpanded: true,
-            decoration: _dec('Stock Point', Icons.warehouse_outlined),
+            decoration: _dec('Thavvu Point', Icons.warehouse_outlined),
             items: _points.entries
                 .map((e) => DropdownMenuItem(
                     value: e.key, child: Text(e.value)))

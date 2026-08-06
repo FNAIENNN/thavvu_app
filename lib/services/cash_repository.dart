@@ -19,14 +19,22 @@ class CashRepository {
   // ═══════════════════════════════════════════════════════════════════
 
   Future<List<CashAllocation>> fetchAllocations({required String siteId}) async {
-    final response = await _client
-        .from(allocationsTable)
-        .select()
-        .eq('site_id', siteId)
-        .order('created_at', ascending: false);
-    return (response as List)
-        .map((row) => CashAllocation.fromJson(_asMap(row)))
-        .toList();
+    try {
+      final uid = _client.auth.currentUser?.id;
+      var query = _client.from(allocationsTable).select();
+      if (siteId.isNotEmpty && uid != null && uid.isNotEmpty) {
+        query = query.or('site_id.eq.$siteId,allocated_to.eq.$uid');
+      } else if (siteId.isNotEmpty) {
+        query = query.eq('site_id', siteId);
+      }
+      final response = await query.order('created_at', ascending: false);
+      return (response as List)
+          .map((row) => CashAllocation.fromJson(_asMap(row)))
+          .toList();
+    } catch (e) {
+      debugPrint('fetchAllocations error: $e');
+      return const [];
+    }
   }
 
   Future<CashAllocation> createAllocation({

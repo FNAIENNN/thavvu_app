@@ -107,6 +107,29 @@ class StockInventoryRepository {
         .toList();
   }
 
+  Future<List<Map<String, String>>> fetchThavvuPoints({String? siteId}) async {
+    try {
+      var query = _client.from('thavvu_points').select('id, point_name, site_id');
+      if (siteId != null && siteId.isNotEmpty) {
+        query = query.eq('site_id', siteId);
+      }
+      final rows = await query.order('point_name', ascending: true);
+      final list = <Map<String, String>>[];
+      for (final row in rows as List) {
+        final map = _asMap(row);
+        final id = _string(map, 'id');
+        final name = _string(map, 'point_name', fallback: id);
+        if (id.isNotEmpty) {
+          list.add({'id': id, 'name': name});
+        }
+      }
+      return list;
+    } catch (e) {
+      debugPrint('fetchThavvuPoints failed: $e');
+      return const [];
+    }
+  }
+
   RealtimeChannel watchBatchBalances(void Function() onChanged) {
     return _client
         .channel('public:$batchesTable')
