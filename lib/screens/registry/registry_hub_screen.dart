@@ -344,22 +344,29 @@ class _RegistryHubScreenState extends State<RegistryHubScreen>
       _snack('Supplier name is required.', AppTheme.warning);
       return;
     }
-    final added = await _supplierRepo.addSupplier(
-      name: nameCtrl.text,
-      contactPerson: contactCtrl.text.trim().isEmpty ? null : contactCtrl.text.trim(),
-      phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
-      address: addressCtrl.text.trim().isEmpty ? null : addressCtrl.text.trim(),
-      siteId: _siteId,
-      thavvuPointId: _pointId,
-      paymentUpi: upiCtrl.text.trim().isEmpty ? null : upiCtrl.text.trim(),
-    );
+    bool added;
+    try {
+      added = await _supplierRepo.addSupplier(
+        name: nameCtrl.text,
+        contactPerson: contactCtrl.text.trim().isEmpty ? null : contactCtrl.text.trim(),
+        phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+        address: addressCtrl.text.trim().isEmpty ? null : addressCtrl.text.trim(),
+        siteId: _siteId,
+        thavvuPointId: _pointId,
+        paymentUpi: upiCtrl.text.trim().isEmpty ? null : upiCtrl.text.trim(),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _snack('Failed to add supplier: $e', AppTheme.danger);
+      return;
+    }
     if (!mounted) return;
     if (added) {
       _snack('Supplier "${nameCtrl.text.trim()}" saved permanently.',
           AppTheme.success);
       await _load();
     } else {
-      _snack('Failed to add supplier.', AppTheme.danger);
+      _snack('Supplier name is required.', AppTheme.warning);
     }
   }
 

@@ -57,6 +57,9 @@ class SupabaseSupplierRepository {
   }
 
   /// Adds a brand-new supplier (permanent, active by default).
+  ///
+  /// Throws on failure (RLS, network, validation) so the caller can surface
+  /// the REAL error instead of a generic "failed" message.
   Future<bool> addSupplier({
     required String name,
     String? contactPerson,
@@ -67,30 +70,25 @@ class SupabaseSupplierRepository {
     String? paymentUpi,
     String? notes,
   }) async {
-    try {
-      final trimmed = name.trim();
-      if (trimmed.isEmpty) return false;
-      await _client.from(table).insert({
-        'id': 'SUP-${DateTime.now().millisecondsSinceEpoch}',
-        'group_name': 'General',
-        'name': trimmed,
-        'contact_person': contactPerson,
-        'phone': phone,
-        'address': address,
-        'site_id': siteId,
-        'thavvu_point_id': thavvuPointId,
-        'payment_upi': paymentUpi,
-        'notes': notes,
-        'active': true,
-        'is_demo': false,
-        'created_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      });
-      return true;
-    } catch (e) {
-      debugPrint('addSupplier failed: $e');
-      return false;
-    }
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return false;
+    await _client.from(table).insert({
+      'id': 'SUP-${DateTime.now().millisecondsSinceEpoch}',
+      'group_name': 'General',
+      'name': trimmed,
+      'contact_person': contactPerson,
+      'phone': phone,
+      'address': address,
+      'site_id': siteId,
+      'thavvu_point_id': thavvuPointId,
+      'payment_upi': paymentUpi,
+      'notes': notes,
+      'active': true,
+      'is_demo': false,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+    return true;
   }
 
   /// Soft-delete / restore a supplier (active=false hides it from the GIN
@@ -160,6 +158,12 @@ class SupabaseSupplierRepository {
       createdAt: created,
       updatedAt: updated,
       active: row['active'] as bool? ?? true,
+      paymentUpi: row['payment_upi']?.toString() ?? '',
+      paymentAccountHolder: row['payment_account_holder']?.toString() ?? '',
+      paymentBank: row['payment_bank']?.toString() ?? '',
+      paymentAccountNumber: row['payment_account_number']?.toString() ?? '',
+      paymentIfsc: row['payment_ifsc']?.toString() ?? '',
+      paymentNote: row['payment_note']?.toString() ?? '',
     );
   }
 }

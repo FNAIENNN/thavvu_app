@@ -25,6 +25,14 @@ class Supplier {
   final DateTime updatedAt;
   final bool active; // soft-delete flag (hidden from dropdowns when false)
 
+  // Payment details stored by the HOD enterprise catalog (suppliers table).
+  final String paymentUpi;
+  final String paymentAccountHolder;
+  final String paymentBank;
+  final String paymentAccountNumber;
+  final String paymentIfsc;
+  final String paymentNote;
+
   const Supplier({
     required this.id,
     required this.name,
@@ -46,6 +54,12 @@ class Supplier {
     required this.createdAt,
     required this.updatedAt,
     this.active = true,
+    this.paymentUpi = '',
+    this.paymentAccountHolder = '',
+    this.paymentBank = '',
+    this.paymentAccountNumber = '',
+    this.paymentIfsc = '',
+    this.paymentNote = '',
   });
 
   bool get isTemporary => type == SupplierType.temporary;
