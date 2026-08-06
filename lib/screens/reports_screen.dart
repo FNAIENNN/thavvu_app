@@ -421,7 +421,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         paid: 12000,
         balance: 6000,
         details: const {
-          'Worker ID': 'THV-WRK-001',
+          'Worker ID': 'TP-VJA-001',
           'Full Name': 'Ravi Kumar',
           'Aadhar No': '4589-1234-9981',
           'Joining Date': '2025-01-15',
@@ -457,7 +457,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         paid: 11000,
         balance: 3000,
         details: const {
-          'Worker ID': 'THV-WRK-002',
+          'Worker ID': 'TP-VJA-002',
           'Full Name': 'Mahesh Naidu',
           'Aadhar No': '8834-5512-1092',
           'Joining Date': '2025-03-01',
@@ -711,7 +711,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         details: const {
           'Transaction ID': 'CSH-2026-551',
           'Expense Category': 'Assets / Hardware Tools',
-          'Thavvu Site ID': 'THV-SITE-02',
+          'Thavvu Site ID': 'TP-VJA-002',
           'Asset Details': 'Pipes & Connectors (15 Nos @ ₹300)',
           'Invoice Attachment': 'Attached (hardware_receipt_551.pdf)',
           'Opening Supervisor Cash': '₹15,000',
