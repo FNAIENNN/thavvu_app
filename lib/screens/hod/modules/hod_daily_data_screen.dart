@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../features/hod_machine/data/repositories/supabase_hod_machine_repository.dart';
@@ -8,6 +10,7 @@ import '../../../features/hod_machine/presentation/widgets/daily_log_detail_shee
 import '../../../features/hod_machine/presentation/widgets/daily_log_review_card.dart';
 import '../../../features/hod_machine/presentation/widgets/machine_context_card.dart';
 import '../../../features/hod_machine/presentation/widgets/machine_status_chip.dart';
+import '../../../services/hod_site_workspace_service.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/collapsible_tab_scaffold.dart';
 
@@ -21,7 +24,7 @@ import '../../../widgets/collapsible_tab_scaffold.dart';
 class HodDailyDataScreen extends StatefulWidget {
   final String siteId;
   final String siteName;
-  final String thavvuPointId;
+  final String? thavvuPointId;
   final String supervisorId;
   final String supervisorName;
   final String hodId;
@@ -30,7 +33,7 @@ class HodDailyDataScreen extends StatefulWidget {
     super.key,
     this.siteId = 'SITE-VJA-001',
     this.siteName = 'Demo Site',
-    this.thavvuPointId = 'TP-VJA-001',
+    this.thavvuPointId,
     this.supervisorId = 'SUP-VJA-001',
     this.supervisorName = 'Supervisor Rajesh',
     this.hodId = 'HOD-001',
@@ -55,12 +58,18 @@ class _HodDailyDataScreenState extends State<HodDailyDataScreen>
   bool _isLoading = true;
   String? _errorMessage;
 
+  // ── Active workspace context (site / point) ────────────────
+  late String _siteId = widget.siteId;
+  late String _siteName = widget.siteName;
+  late String? _thavvuPointId = widget.thavvuPointId;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
     _searchController.addListener(() => setState(() {}));
     _loadData();
+    unawaited(_maybeResolveContext());
   }
 
   @override
@@ -70,6 +79,33 @@ class _HodDailyDataScreenState extends State<HodDailyDataScreen>
     super.dispose();
   }
 
+  /// Resolves the HOD's real workspace when this screen was constructed with
+  /// demo defaults (shell quick-route). Non-blocking; defaults stay on any
+  /// failure so the screen always renders.
+  Future<void> _maybeResolveContext() async {
+    final hasExplicitContext =
+        widget.siteId != 'SITE-VJA-001' ||
+        widget.siteName != 'Demo Site' ||
+        widget.thavvuPointId != null;
+    if (hasExplicitContext) return;
+    try {
+      final sites = await HodSiteWorkspaceService().adminCreatedSites();
+      if (sites.isEmpty) return;
+      final site = sites.first;
+      final points =
+          await HodSiteWorkspaceService().thavvuPointsForSite(site.id);
+      if (!mounted) return;
+      setState(() {
+        _siteId = site.id;
+        _siteName = site.name;
+        _thavvuPointId = points.isNotEmpty ? points.first.id : null;
+      });
+      await _loadData();
+    } catch (_) {
+      // Keep defaults.
+    }
+  }
+
   Future<void> _loadData() async {
     setState(() {
       _isLoading = true;
@@ -77,12 +113,12 @@ class _HodDailyDataScreenState extends State<HodDailyDataScreen>
     });
     try {
       final logs = await _repository.getDailyLogs(
-        siteId: widget.siteId,
-        thavvuPointId: widget.thavvuPointId,
+        siteId: _siteId,
+        thavvuPointId: _thavvuPointId,
         supervisorId: widget.supervisorId,
       );
       final payments = await _repository.getPaymentRequests(
-        siteId: widget.siteId,
+        siteId: _siteId,
       );
       if (!mounted) return;
       setState(() {
@@ -206,9 +242,9 @@ class _HodDailyDataScreenState extends State<HodDailyDataScreen>
       header: Column(
         children: [
           MachineContextCard(
-            siteName: widget.siteName,
-            siteId: widget.siteId,
-            thavvuPointName: widget.thavvuPointId,
+            siteName: _siteName,
+            siteId: _siteId,
+            thavvuPointName: _thavvuPointId,
             supervisorName: widget.supervisorName,
             hodId: widget.hodId,
           ),

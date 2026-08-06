@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'modules/hod_attendance_screen.dart';
 import 'modules/hod_cash_screen.dart';
@@ -160,14 +161,33 @@ class HodSiteModulesScreen extends StatelessWidget {
   }
 
   Widget _screenFor(HodModuleInfo module) {
-    final child = module.title == 'Machines'
-        ? HodMachinesEntryScreen(
-            siteId: siteId,
-            thavvuPointId: thavvuPointId ?? 'TP-DEMO-001',
-            supervisorId: supervisorId ?? assignedTo ?? 'SUP-VJA-001',
-            hodId: 'HOD-001',
-          )
-        : module.screen;
+    final hodId = _resolveHodId();
+    final pointId = thavvuPointId;
+    final supervisor = supervisorId ?? assignedTo;
+    final Widget child;
+    switch (module.title) {
+      case 'Machines':
+        child = HodMachinesEntryScreen(
+          siteId: siteId,
+          siteName: siteName,
+          thavvuPointId: pointId,
+          supervisorId: supervisor ?? 'SUP-VJA-001',
+          hodId: hodId,
+        );
+        break;
+      case 'Daily Data':
+        child = HodDailyDataScreen(
+          siteId: siteId,
+          siteName: siteName,
+          thavvuPointId: pointId,
+          supervisorId: supervisor ?? 'SUP-VJA-001',
+          supervisorName: assignedTo ?? supervisor ?? 'Supervisor',
+          hodId: hodId,
+        );
+        break;
+      default:
+        child = module.screen;
+    }
 
     return _HodSelectedContextWrapper(
       siteName: siteName,
@@ -177,6 +197,18 @@ class HodSiteModulesScreen extends StatelessWidget {
       assignedTo: assignedTo,
       child: child,
     );
+  }
+
+  /// The authenticated HOD's profiles.id UUID when signed in (the value the
+  /// DB UUID FKs expect); falls back to the display id for offline/dev.
+  String _resolveHodId() {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null && user.id.isNotEmpty) return user.id;
+    } catch (_) {
+      // Supabase not initialized (widget tests / early startup).
+    }
+    return 'HOD-001';
   }
 
   @override

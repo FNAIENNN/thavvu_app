@@ -31,6 +31,7 @@ class _FakeMachineRepository implements HodMachineRepository {
     String? phone,
     double? rating,
     String? notes,
+    String? thavvuPointId,
     required String createdBy,
   }) =>
       throw UnimplementedError('not used in widget test');

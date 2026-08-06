@@ -17,6 +17,7 @@ abstract class HodMachineRepository {
     String? phone,
     double? rating,
     String? notes,
+    String? thavvuPointId,
     required String createdBy,
   });
 

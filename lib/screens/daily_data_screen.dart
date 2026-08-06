@@ -1,6 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../features/hod_machine/data/repositories/supabase_hod_machine_repository.dart';
+import '../features/hod_machine/domain/models/machine_asset.dart';
+import '../features/hod_machine/domain/models/machine_daily_log.dart';
+import '../features/hod_machine/domain/models/machine_diesel_line.dart';
 import '../services/hod_site_workspace_service.dart';
 import '../services/attendance_context_service.dart';
 import '../services/stock_inventory_repository.dart';
@@ -230,7 +235,11 @@ class DieselLogEntry {
 class DailyDataScreen extends StatefulWidget {
   final bool isHOD;
 
-  const DailyDataScreen({super.key, this.isHOD = false});
+  /// When set (e.g. a machine just registered in Machine Entry), the daily
+  /// screen opens directly on that machine's log form after live data loads.
+  final String? initialMachineId;
+
+  const DailyDataScreen({super.key, this.isHOD = false, this.initialMachineId});
 
   @override
   State<DailyDataScreen> createState() => _DailyDataScreenState();
@@ -241,58 +250,13 @@ class _DailyDataScreenState extends State<DailyDataScreen>
   final StockInventoryRepository _stockRepository = StockInventoryRepository();
   final AttendanceContextService _contextService = AttendanceContextService();
 
-  final List<Map<String, String>> _machines = [
-    {
-      'id': 'MCH-001',
-      'name': 'Excavator',
-      'type': 'Heavy',
-      'location': 'Site A',
-      'dieselOption': 'With diesel',
-      'isArchived': 'false',
-      'betaEnabled': 'true',
-      'betaRequiredHours': '8',
-    },
-    {
-      'id': 'MCH-002',
-      'name': 'Loader',
-      'type': 'Medium',
-      'location': 'Site A',
-      'dieselOption': 'With diesel',
-      'isArchived': 'false',
-      'betaEnabled': 'true',
-      'betaRequiredHours': '8',
-    },
-    {
-      'id': 'MCH-003',
-      'name': 'Crane',
-      'type': 'Heavy',
-      'location': 'Site B',
-      'dieselOption': 'With diesel',
-      'isArchived': 'false',
-      'betaEnabled': 'true',
-      'betaRequiredHours': '8',
-    },
-    {
-      'id': 'MCH-004',
-      'name': 'Dump Truck',
-      'type': 'Medium',
-      'location': 'Site B',
-      'dieselOption': 'With diesel',
-      'isArchived': 'false',
-      'betaEnabled': 'true',
-      'betaRequiredHours': '8',
-    },
-    {
-      'id': 'MCH-005',
-      'name': 'Compactor',
-      'type': 'Light',
-      'location': 'Site C',
-      'dieselOption': 'Without diesel',
-      'isArchived': 'false',
-      'betaEnabled': 'true',
-      'betaRequiredHours': '8',
-    },
-  ];
+  // Live machine catalog: populated from Supabase `machine_assets` for the
+  // supervisor's current site. The map shape (id/name/type/location/
+  // dieselOption/isArchived/betaEnabled/betaRequiredHours) is what every
+  // list/detail widget below already renders.
+  final List<Map<String, String>> _machines = [];
+  bool _loadingMachines = true;
+  String? _machineLoadError;
 
   Map<String, MachineSummary> _machineSummaries = {};
   bool _showMachineList = true;
@@ -395,13 +359,6 @@ class _DailyDataScreenState extends State<DailyDataScreen>
       TextEditingController();
   double _totalWorkingHours = 0.0;
   final double _betaRequiredHours = 8.0;
-  final Set<String> _betaEligibleMachines = {
-    'MCH-001',
-    'MCH-002',
-    'MCH-003',
-    'MCH-004',
-    'MCH-005'
-  };
 
   // Workers
   int _currentWorkerCount = 0;
@@ -470,22 +427,70 @@ class _DailyDataScreenState extends State<DailyDataScreen>
     _mainTabController = TabController(length: 2, vsync: this);
     _machineSearchController.addListener(() => setState(() {}));
     _historySearchController.addListener(() => setState(() {}));
-    for (var machine in _machines) {
-      _machineSummaries[machine['id']!] = MachineSummary(
-        id: machine['id']!,
-        name: machine['name']!,
-        type: machine['type']!,
-        location: machine['location']!,
-        dieselOption: machine['dieselOption']!,
-      );
-    }
     _timeBlocks.add(TimeBlock(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       startTime: const TimeOfDay(hour: 8, minute: 0),
       endTime: const TimeOfDay(hour: 17, minute: 0),
     ));
     _seedInitialHistoryLogs();
+    unawaited(_loadMachines());
   }
+
+  /// Loads the live machine catalog for the supervisor's current site from
+  /// Supabase (`machine_assets`) and maps each asset into the map shape the
+  /// UI renders. Machines created from Machine Entry (HOD or supervisor)
+  /// appear here automatically. When the screen was opened with an
+  /// [DailyDataScreen.initialMachineId], that machine's log form opens
+  /// directly after load.
+  Future<void> _loadMachines() async {
+    try {
+      final siteId = await _contextService.resolveSiteId();
+      final assets = await SupabaseHodMachineRepository(null)
+          .getMachines(siteId: siteId ?? 'SITE-VJA-001');
+      if (!mounted) return;
+      final mapped = assets.where((m) => m.isActive).map(_machineToMap).toList();
+      setState(() {
+        _machines
+          ..clear()
+          ..addAll(mapped);
+        _machineSummaries = {
+          for (final m in mapped)
+            m['id']!: MachineSummary(
+              id: m['id']!,
+              name: m['name']!,
+              type: m['type']!,
+              location: m['location']!,
+              dieselOption: m['dieselOption']!,
+            ),
+        };
+        _loadingMachines = false;
+        _machineLoadError = null;
+      });
+      final initialId = widget.initialMachineId;
+      if (initialId != null && _machineSummaries.containsKey(initialId)) {
+        _openLogDetail(initialId);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingMachines = false;
+        _machineLoadError = e.toString();
+      });
+    }
+  }
+
+  /// Converts a Supabase [MachineAsset] into the legacy map shape used by the
+  /// list/detail widgets (demo defaults for the UI-only flags).
+  Map<String, String> _machineToMap(MachineAsset m) => {
+        'id': m.id,
+        'name': m.machineName,
+        'type': m.vehicleType,
+        'location': m.siteId,
+        'dieselOption': 'With diesel',
+        'isArchived': 'false',
+        'betaEnabled': 'true',
+        'betaRequiredHours': '8',
+      };
 
   @override
   void dispose() {
@@ -2141,8 +2146,9 @@ class _DailyDataScreenState extends State<DailyDataScreen>
     final billFile = _generalBillFileName;
 
     setState(() => _isSubmitting = true);
+    String? resolvedSiteId;
     try {
-      final siteId = await _contextService.resolveSiteId();
+      resolvedSiteId = await _contextService.resolveSiteId();
       for (final entry in _dieselLogEntries) {
         if (entry.liters <= 0) continue;
         final balance = await _stockRepository.findFuelBalance(
@@ -2150,7 +2156,7 @@ class _DailyDataScreenState extends State<DailyDataScreen>
           fuelType: entry.fuelType,
         );
         await _stockRepository.issueForModule(
-          siteId: siteId,
+          siteId: resolvedSiteId,
           module: 'daily_machine_log',
           sourceReference: 'DAILY-DIESEL-$machineId-${entry.id}',
           stockBalanceId: balance.id,
@@ -2162,6 +2168,30 @@ class _DailyDataScreenState extends State<DailyDataScreen>
       if (!mounted) return;
       setState(() => _isSubmitting = false);
       _showSnackbar('Daily log was not saved: $error', AppTheme.danger);
+      return;
+    }
+    if (!mounted) return;
+
+    // Persist the daily log to Supabase so the HOD review screen
+    // (machine_daily_logs) sees it in real time. This is the live bridge
+    // between the supervisor Daily Machine screen and HOD review.
+    try {
+      await _syncDailyLogToServer(
+        siteId: resolvedSiteId,
+        machineId: machineId,
+        machineName: machineName,
+        workingHours: _totalWorkingHours,
+        workerCount: workerCount,
+        betaAmount: betaAmount,
+        extraBetaAmount: extraBetaAmount,
+        notes: notesText,
+        dieselEntries: _dieselLogEntries,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      _showSnackbar('Daily log was not saved to the server: $error',
+          AppTheme.danger);
       return;
     }
     if (!mounted) return;
@@ -2250,6 +2280,138 @@ class _DailyDataScreenState extends State<DailyDataScreen>
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  /// Persists a daily machine log to Supabase (`machine_daily_logs`) so the
+  /// HOD review screen sees it in real time.
+  ///
+  /// One log per machine per day: the first submission creates the log,
+  /// later submissions append diesel lines and update the working hours /
+  /// beta figures. Throws on failure so the caller can surface the real
+  /// error instead of silently dropping the log.
+  Future<void> _syncDailyLogToServer({
+    required String? siteId,
+    required String machineId,
+    required String machineName,
+    required double workingHours,
+    required int workerCount,
+    required double betaAmount,
+    required double extraBetaAmount,
+    required String notes,
+    required List<DieselLogEntry> dieselEntries,
+  }) async {
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    if (user == null) {
+      throw StateError('Sign in to save a daily machine log.');
+    }
+    final resolvedSiteId = (siteId == null || siteId.isEmpty)
+        ? 'SITE-VJA-001'
+        : siteId;
+
+    String? thavvuPointId;
+    try {
+      thavvuPointId = await _contextService.resolvePointId();
+    } catch (_) {
+      // Fall through to site-level point lookup.
+    }
+    if (thavvuPointId == null || thavvuPointId.isEmpty) {
+      try {
+        final point = await client
+            .from('thavvu_points')
+            .select('id')
+            .eq('site_id', resolvedSiteId)
+            .limit(1)
+            .maybeSingle();
+        thavvuPointId = point?['id'] as String?;
+      } catch (_) {
+        // No point resolvable — the log insert below will fail on the NOT
+        // NULL thavvu_point_id column; surface it as a normal error.
+      }
+    }
+    if (thavvuPointId == null || thavvuPointId.isEmpty) {
+      throw StateError(
+          'No Thavvu Point assigned to your account. Ask the HOD to grant one.');
+    }
+
+    final lines = <MachineDieselLine>[
+      for (final entry in dieselEntries)
+        if (entry.liters > 0)
+          MachineDieselLine(
+            id:
+                'DL-${DateTime.now().microsecondsSinceEpoch}-${dieselEntries.indexOf(entry)}',
+            dailyLogId: '',
+            fuelType: entry.fuelType,
+            stockPoint: entry.stockPoint,
+            liters: entry.liters,
+            amount: 0,
+            remarks: entry.remarks,
+          ),
+    ];
+
+    final today = DateTime.now();
+    final todayKey =
+        DateTime(today.year, today.month, today.day).toIso8601String();
+
+    String? existingLogId;
+    try {
+      final existing = await client
+          .from('machine_daily_logs')
+          .select('id')
+          .eq('machine_id', machineId)
+          .eq('log_date', todayKey)
+          .not('status', 'in', '("draft","rejected")')
+          .limit(1)
+          .maybeSingle();
+      existingLogId = existing?['id'] as String?;
+    } catch (_) {
+      // No existing log — create a new one below.
+    }
+
+    if (existingLogId != null) {
+      // Update the day's totals and append the new diesel lines.
+      await client.from('machine_daily_logs').update({
+        'working_hours': workingHours,
+        'worker_count': workerCount,
+        'beta_amount': betaAmount,
+        'extra_beta_amount': extraBetaAmount,
+        if (notes.isNotEmpty) 'notes': notes,
+        'status': 'submitted',
+        'submitted_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', existingLogId);
+      if (lines.isNotEmpty) {
+        await client.from('machine_daily_diesel_lines').insert(
+          lines
+              .map((line) => {
+                    ...line.toJson(),
+                    'id': '${line.id}-$existingLogId',
+                    'daily_log_id': existingLogId,
+                  })
+              .toList(),
+        );
+      }
+      return;
+    }
+
+    final log = MachineDailyLog(
+      id: 'LOG-${DateTime.now().microsecondsSinceEpoch}',
+      logDate: today,
+      siteId: resolvedSiteId,
+      thavvuPointId: thavvuPointId,
+      supervisorId: user.id,
+      machineId: machineId,
+      location: machineName,
+      dieselOption: _dieselOption,
+      workingHours: workingHours,
+      workerCount: workerCount,
+      betaAmount: betaAmount,
+      extraBetaAmount: extraBetaAmount,
+      notes: notes.isEmpty ? null : notes,
+      status: DailyLogStatus.submitted,
+      submittedAt: DateTime.now(),
+      dieselLines: lines,
+    );
+    await SupabaseHodMachineRepository(null).submitDailyLog(log);
   }
 
   // ── Transaction history sheet ─────────────────────────────────────────────
@@ -2797,16 +2959,54 @@ class _DailyDataScreenState extends State<DailyDataScreen>
             : null,
       ),
       body: _showMachineList
-          ? (_showArchived
-              ? _buildMachineList()
-              : TabBarView(
-                  controller: _mainTabController,
-                  children: [
-                    _buildMachineList(),
-                    _buildHistoryTab(),
-                  ],
-                ))
+          ? (_loadingMachines
+              ? const Center(child: CircularProgressIndicator())
+              : _machineLoadError != null
+                  ? _buildMachineLoadError()
+                  : (_showArchived
+                      ? _buildMachineList()
+                      : TabBarView(
+                          controller: _mainTabController,
+                          children: [
+                            _buildMachineList(),
+                            _buildHistoryTab(),
+                          ],
+                        )))
           : _buildDetailForm(),
+    );
+  }
+
+  Widget _buildMachineLoadError() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.cloud_off, size: 48, color: AppTheme.danger),
+            const SizedBox(height: 12),
+            const Text('Failed to load machines',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 6),
+            Text(_machineLoadError ?? 'Unknown error',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary)),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () {
+                setState(() {
+                  _loadingMachines = true;
+                  _machineLoadError = null;
+                });
+                unawaited(_loadMachines());
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

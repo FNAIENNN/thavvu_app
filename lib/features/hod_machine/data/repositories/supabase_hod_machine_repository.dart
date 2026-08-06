@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/models/machine_asset.dart';
@@ -24,19 +25,83 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
 
   // ── Suppliers ───────────────────────────────────────────────
 
+  /// Machine suppliers for a site.
+  ///
+  /// Bridges the two supplier tables so a supplier created anywhere in the
+  /// HOD workspace is immediately selectable in machine entry:
+  ///   * `machine_suppliers` — site-scoped machine suppliers (rating/type).
+  ///   * `suppliers`        — the enterprise catalog; every machine-group
+  ///     row (group_name matches "machin*") is visible across ALL of the
+  ///     HOD's sites (tenant RLS), so a supplier added on another site
+  ///     still shows up here.
+  ///
+  /// Rows are deduped by normalized name, preferring the richer
+  /// `machine_suppliers` row when both tables contain the same supplier.
   @override
   Future<List<MachineSupplier>> getSuppliers({required String siteId}) async {
-    final response = await _client
-        .from('machine_suppliers')
-        .select()
-        .eq('site_id', siteId)
-        .order('created_at', ascending: false);
+    try {
+      final siteRows = await _client
+          .from('machine_suppliers')
+          .select()
+          .eq('site_id', siteId)
+          .order('created_at', ascending: false);
 
-    return (response as List)
-        .map((j) => MachineSupplier.fromJson(j as Map<String, dynamic>))
-        .toList();
+      final catalogRows = await _client
+          .from('suppliers')
+          .select()
+          .or('group_name.ilike.%machin%')
+          .eq('active', true)
+          .order('updated_at', ascending: false);
+
+      final byName = <String, MachineSupplier>{};
+      for (final j in siteRows as List) {
+        final s = MachineSupplier.fromJson(j as Map<String, dynamic>);
+        byName[s.name.trim().toLowerCase()] = s;
+      }
+      // Enterprise catalog rows bridge cross-site; they never overwrite a
+      // richer machine_suppliers row for the same name.
+      for (final j in catalogRows as List) {
+        final s = _supplierFromCatalog(j as Map<String, dynamic>, siteId);
+        if (s.name.trim().isEmpty) continue;
+        byName.putIfAbsent(s.name.trim().toLowerCase(), () => s);
+      }
+      return byName.values.toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    } catch (e) {
+      debugPrint('getSuppliers failed: $e');
+      rethrow;
+    }
   }
 
+  /// Maps a `suppliers` enterprise-catalog row to a [MachineSupplier].
+  /// The enterprise catalog has no rating/type — machine defaults apply.
+  MachineSupplier _supplierFromCatalog(
+      Map<String, dynamic> row, String fallbackSiteId) {
+    return MachineSupplier(
+      id: row['id']?.toString() ?? '',
+      siteId: row['site_id']?.toString() ?? fallbackSiteId,
+      name: row['name']?.toString() ?? '',
+      type: 'permanent',
+      phone: row['phone']?.toString(),
+      rating: 0,
+      notes: row['notes']?.toString(),
+      isActive: row['active'] as bool? ?? true,
+      createdBy: '',
+      createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ??
+          DateTime.now(),
+      updatedAt: DateTime.tryParse(row['updated_at']?.toString() ?? '') ??
+          DateTime.now(),
+    );
+  }
+
+  /// Creates a supplier in `machine_suppliers` (the machine-entry source)
+  /// and mirrors it into the `suppliers` enterprise catalog so every
+  /// supervisor and every site of the HOD sees it instantly.
+  ///
+  /// `machine_suppliers.id` is a TEXT PK with no database default — the
+  /// client MUST supply it (this was the 23502 "null value in column id"
+  /// failure in production). `created_by` is resolved to the authenticated
+  /// user's UUID (nullable since 00054) so Postgres never raises 22P02.
   @override
   Future<MachineSupplier> createSupplier({
     required String siteId,
@@ -45,12 +110,15 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
     String? phone,
     double? rating,
     String? notes,
+    String? thavvuPointId,
     required String createdBy,
   }) async {
     final actor = _actorUuid(createdBy);
+    final supplierId = 'SUP-${DateTime.now().millisecondsSinceEpoch}';
     final response = await _client.from('machine_suppliers').insert({
+      'id': supplierId,
       'site_id': siteId,
-      'name': name,
+      'name': name.trim(),
       'type': type,
       'phone': phone,
       'rating': rating ?? 0,
@@ -58,7 +126,32 @@ class SupabaseHodMachineRepository implements HodMachineRepository {
       if (actor != null) 'created_by': actor,
     }).select().single();
 
-    return MachineSupplier.fromJson(response);
+    final created = MachineSupplier.fromJson(response);
+
+    // Mirror into the enterprise catalog (best-effort: the machine-supplier
+    // insert already succeeded; a catalog failure must not break the entry
+    // sheet, but it is logged so sync issues are visible in dev).
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      await _client.from('suppliers').insert({
+        'id': supplierId,
+        'group_name': 'Machine Suppliers',
+        'name': name.trim(),
+        'phone': phone,
+        'site_name': siteId,
+        'site_id': siteId,
+        'thavvu_point_id': thavvuPointId,
+        'notes': notes,
+        'active': true,
+        'is_demo': false,
+        'created_at': now,
+        'updated_at': now,
+      });
+    } catch (e) {
+      debugPrint('createSupplier: enterprise catalog mirror failed: $e');
+    }
+
+    return created;
   }
 
   // ── Machine Assets ─────────────────────────────────────────

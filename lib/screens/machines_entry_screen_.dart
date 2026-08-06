@@ -15,8 +15,10 @@ import '../widgets/photo_capture_card.dart';
 import '../widgets/advance_payment_request.dart';
 import '../widgets/diesel_consumption_table.dart';
 import '../features/hod_machine/data/repositories/supabase_hod_machine_repository.dart';
+import '../features/hod_machine/domain/models/machine_asset.dart';
 import '../features/hod_machine/domain/models/machine_daily_log.dart';
 import '../features/hod_machine/domain/models/machine_diesel_line.dart';
+import 'daily_data_screen.dart';
 
 class MachineCatalogItem {
   final String id;
@@ -469,6 +471,66 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen>
     _hodStockPoint = _stockPoints.first;
     _seedTodayRecords();
     unawaited(_loadHodManagedSuppliers());
+    unawaited(_loadLiveMachines());
+  }
+
+  /// Loads machines registered by the HOD / supervisor from Supabase
+  /// (`machine_assets`) and merges them into the catalog ahead of the legacy
+  /// seeds, deduped by id. Newly registered machines therefore appear
+  /// immediately in the dropdown and flow into the Daily Machine screen.
+  Future<void> _loadLiveMachines() async {
+    try {
+      final siteId = await _contextService.resolveSiteId();
+      final assets = await SupabaseHodMachineRepository(null)
+          .getMachines(siteId: siteId ?? 'SITE-VJA-001');
+      if (!mounted) return;
+      final live = assets
+          .where((m) => m.isActive)
+          .map((m) => MachineCatalogItem(
+                id: m.id,
+                machineName: m.machineName,
+                vehicleNumber: m.vehicleNumber,
+                vehicleType: m.vehicleType,
+                operatorName: m.operatorName,
+              ))
+          .toList();
+      setState(() {
+        for (final machine in live.reversed) {
+          if (_machines.any((entry) => entry.id == machine.id)) continue;
+          _machines.insert(0, machine);
+        }
+      });
+    } catch (e) {
+      debugPrint('_loadLiveMachines failed: $e');
+    }
+  }
+
+  /// Persists a newly registered machine into Supabase `machine_assets` so
+  /// the HOD review screens and the Daily Machine screen (live catalog) see
+  /// it immediately. Best-effort: a server failure never blocks the local
+  /// entry workflow — the warning snackbar surfaces the real error.
+  Future<void> _persistNewMachine(MachineCatalogItem machine) async {
+    try {
+      final siteId = await _contextService.resolveSiteId();
+      final uid = Supabase.instance.client.auth.currentUser?.id ?? '';
+      await SupabaseHodMachineRepository(null).createMachine(
+        machine: MachineAsset(
+          id: machine.id,
+          siteId: siteId ?? 'SITE-VJA-001',
+          machineName: machine.machineName,
+          vehicleNumber: machine.vehicleNumber,
+          vehicleType: machine.vehicleType,
+          operatorName: machine.operatorName,
+          createdBy: uid,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        _showSnackbar(
+            'Machine saved locally; server sync pending: $e',
+            AppTheme.warning);
+      }
+    }
   }
 
   Future<void> _loadHodManagedSuppliers() async {
@@ -881,9 +943,20 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen>
                               _selectedVehicleType = machine.vehicleType;
                             });
                             Navigator.pop(context);
+                            // Persist to Supabase so the HOD review + Daily
+                            // Machine screens see the new machine instantly.
+                            unawaited(_persistNewMachine(machine));
                             _showSnackbar(
-                                '${machine.vehicleNumber} added, selected, and shown in Today Vehicles.',
+                                '${machine.vehicleNumber} added and saved.',
                                 AppTheme.success);
+                            // Seamlessly continue into the Daily Machine
+                            // screen with this machine pre-selected.
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => DailyDataScreen(
+                                    initialMachineId: machine.id),
+                              ),
+                            );
                           },
                           icon: const Icon(Icons.add),
                           label: const FittedBox(

@@ -1037,6 +1037,24 @@ class _HodSuppliersScreenState extends State<HodSuppliersScreen> {
       'is_demo': false,
       'created_at': saved.createdAt.toUtc().toIso8601String(),
     });
+    // Machine-group suppliers must ALSO land in `machine_suppliers`, the
+    // table the HOD/Supervisor machine entry dropdowns read — otherwise a
+    // supplier created here never appears in machine entry.
+    var machineSyncOk = true;
+    if (saved.group == SupplierGroup.machine) {
+      machineSyncOk =
+          await SupabaseSupplierRepository().upsertMachineSupplierRow({
+        'id': saved.id,
+        'site_id': saved.siteId,
+        'name': saved.name,
+        'type': 'permanent',
+        'phone': saved.phone,
+        'rating': 0,
+        'notes': saved.notes,
+        'is_active': saved.active,
+        'created_at': saved.createdAt.toUtc().toIso8601String(),
+      });
+    }
     await _addHistory(
       module: saved.group.shortTitle,
       supplierName: saved.name,
@@ -1048,7 +1066,7 @@ class _HodSuppliersScreenState extends State<HodSuppliersScreen> {
     );
     await _loadAll();
     if (!mounted) return;
-    if (!syncOk) {
+    if (!syncOk || !machineSyncOk) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(

@@ -33,20 +33,24 @@ class MachineSupplier {
 
   factory MachineSupplier.fromJson(Map<String, dynamic> json) {
     return MachineSupplier(
-      id: json['id'] as String,
-      siteId: json['site_id'] as String,
-      name: json['name'] as String,
-      type: json['type'] as String? ?? 'permanent',
-      phone: json['phone'] as String?,
+      id: json['id']?.toString() ?? '',
+      siteId: json['site_id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      type: json['type']?.toString() ?? 'permanent',
+      phone: json['phone']?.toString(),
       rating: (json['rating'] as num?)?.toDouble() ?? 0,
       validUntil: json['valid_until'] != null
-          ? DateTime.parse(json['valid_until'] as String)
+          ? DateTime.tryParse(json['valid_until'] as String)
           : null,
-      notes: json['notes'] as String?,
+      notes: json['notes']?.toString(),
       isActive: json['is_active'] as bool? ?? true,
-      createdBy: json['created_by'] as String,
-      createdAt: DateTime.parse(json['created_at'] as String),
-      updatedAt: DateTime.parse(json['updated_at'] as String),
+      // `created_by` is nullable since migration 00054 — never cast to
+      // non-null String.
+      createdBy: json['created_by']?.toString() ?? '',
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? '') ??
+          DateTime.now(),
+      updatedAt: DateTime.tryParse(json['updated_at']?.toString() ?? '') ??
+          DateTime.now(),
     );
   }
 

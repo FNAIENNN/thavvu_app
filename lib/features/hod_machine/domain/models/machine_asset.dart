@@ -37,9 +37,11 @@ class MachineAsset {
       operatorName: json['operator_name'] as String,
       operatorPhone: json['operator_phone'] as String?,
       isActive: json['is_active'] as bool? ?? true,
-      createdBy: json['created_by'] as String,
-      createdAt: DateTime.parse(json['created_at'] as String),
-      updatedAt: DateTime.parse(json['updated_at'] as String),
+      createdBy: json['created_by']?.toString() ?? '',
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? '') ??
+          DateTime.now(),
+      updatedAt: DateTime.tryParse(json['updated_at']?.toString() ?? '') ??
+          DateTime.now(),
     );
   }
 

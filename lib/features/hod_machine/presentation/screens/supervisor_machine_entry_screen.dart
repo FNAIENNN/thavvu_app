@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../services/attendance_context_service.dart';
 import '../../../../services/stock_inventory_repository.dart';
+import '../../../../screens/daily_data_screen.dart';
 import '../../../../theme/app_theme.dart';
 import '../../../../widgets/collapsible_tab_scaffold.dart';
 import '../../data/repositories/supabase_hod_machine_repository.dart';
@@ -280,6 +281,13 @@ class _SupervisorMachineEntryScreenState
       _showSnackbar(
           'Entry submitted — fuel deducted and log saved for HOD review.',
           AppTheme.success);
+      // Seamlessly continue into the Daily Machine screen with the
+      // registered machine pre-selected (context is preserved on the stack).
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DailyDataScreen(initialMachineId: machine.id),
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() => _submitting = false);

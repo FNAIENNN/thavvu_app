@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../features/hod_machine/data/repositories/supabase_hod_machine_repository.dart';
@@ -7,6 +9,7 @@ import '../../../features/hod_machine/domain/models/machine_supplier.dart';
 import '../../../features/hod_machine/domain/services/hod_machine_repository_interface.dart';
 import '../../../features/hod_machine/presentation/widgets/machine_context_card.dart';
 import '../../../features/hod_machine/presentation/widgets/machine_status_chip.dart';
+import '../../../services/hod_site_workspace_service.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/collapsible_tab_scaffold.dart';
 
@@ -55,6 +58,14 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
   List<MachinePaymentRequest> _paymentRequests = [];
   bool _isLoading = true;
   String? _errorMessage;
+
+  // ── Active workspace context (site / point) ────────────────
+  // The HOD shell quick-routes may construct this screen with the demo
+  // defaults; when that happens we resolve the HOD's real first site and
+  // Thavvu Point from Supabase so dropdowns and writes are site-scoped.
+  late String _siteId = widget.siteId;
+  late String? _siteName = widget.siteName;
+  late String? _thavvuPointId = widget.thavvuPointId;
 
   // ── Entry form state ────────────────────────────────────────
   MachineAsset? _selectedMachine;
@@ -130,6 +141,7 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
     _selectedFuelType = _fuelTypes.first;
     _selectedStockPoint = _stockPoints.first;
     _loadData();
+    unawaited(_maybeResolveContext());
   }
 
   @override
@@ -158,9 +170,9 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
     setState(() { _isLoading = true; _errorMessage = null; });
     try {
       final results = await Future.wait([
-        _repository.getSuppliers(siteId: widget.siteId),
-        _repository.getMachines(siteId: widget.siteId),
-        _repository.getPaymentRequests(siteId: widget.siteId),
+        _repository.getSuppliers(siteId: _siteId),
+        _repository.getMachines(siteId: _siteId),
+        _repository.getPaymentRequests(siteId: _siteId),
       ]);
       if (!mounted) return;
       setState(() {
@@ -172,6 +184,34 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
     } catch (e) {
       if (!mounted) return;
       setState(() { _errorMessage = e.toString(); _isLoading = false; });
+    }
+  }
+
+  /// Resolves the HOD's real workspace when this screen was constructed with
+  /// the demo defaults (shell quick-route) instead of an explicit site/point
+  /// (site-modules flow). Non-blocking: on any failure the demo defaults stay
+  /// and the screen still renders.
+  Future<void> _maybeResolveContext() async {
+    final hasExplicitContext =
+        widget.siteId != 'SITE-VJA-001' ||
+        widget.siteName != null ||
+        widget.thavvuPointId != null;
+    if (hasExplicitContext) return;
+    try {
+      final sites = await HodSiteWorkspaceService().adminCreatedSites();
+      if (sites.isEmpty) return;
+      final site = sites.first;
+      final points =
+          await HodSiteWorkspaceService().thavvuPointsForSite(site.id);
+      if (!mounted) return;
+      setState(() {
+        _siteId = site.id;
+        _siteName = site.name;
+        _thavvuPointId = points.isNotEmpty ? points.first.id : null;
+      });
+      await _loadData();
+    } catch (_) {
+      // Keep defaults — the screen works against them when offline.
     }
   }
 
@@ -382,9 +422,9 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
   Widget _buildMachineSupplierSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       MachineContextCard(
-        siteName: widget.siteName ?? widget.siteId,
-        siteId: widget.siteId, hodId: widget.hodId,
-        thavvuPointName: widget.thavvuPointId,
+        siteName: _siteName ?? _siteId,
+        siteId: _siteId, hodId: widget.hodId,
+        thavvuPointName: _thavvuPointId,
         supervisorName: widget.supervisorId,
       ),
       const SizedBox(height: 12),
@@ -483,7 +523,10 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
       onChanged: (v) {
         if (v == null) return;
         if (v == '__add_sup__') { _showAddSupplierSheet(); return; }
-        setState(() { _selectedSupplier = _suppliers.firstWhere((s) => s.id == v); });
+        final picked = _suppliers.firstWhere((s) => s.id == v);
+        // Attach the current site context to the selected supplier so the
+        // entry is recorded against THIS site (cross-site catalog support).
+        setState(() => _selectedSupplier = picked.copyWith(siteId: _siteId));
       },
     );
   }
@@ -1043,7 +1086,7 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
       } else {
         machine = MachineAsset(
           id: _newId('MCH'),
-          siteId: widget.siteId,
+          siteId: _siteId,
           machineName: _operatorNameCtl.text.trim().isNotEmpty ? _operatorNameCtl.text.trim() : 'Machine',
           vehicleNumber: _vehicleNumberCtl.text.trim().toUpperCase(),
           vehicleType: _selectedVehicleType ?? 'Excavator',
@@ -1059,8 +1102,8 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
       for (final d in allDrafts) {
         final pr = MachinePaymentRequest(
           id: d.id,
-          siteId: widget.siteId,
-          thavvuPointId: widget.thavvuPointId ?? widget.siteId,
+          siteId: _siteId,
+          thavvuPointId: _thavvuPointId ?? _siteId,
           kind: d.kind,
           amount: d.amount,
           paymentMode: d.paymentMode,
@@ -1306,7 +1349,7 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
                   if (!(formKey.currentState?.validate() ?? false)) return;
                   final machine = MachineAsset(
                     id: _newId('MCH'),
-                    siteId: widget.siteId,
+                    siteId: _siteId,
                     machineName: nameCtl.text.trim(),
                     vehicleNumber: vnCtl.text.trim().toUpperCase(),
                     vehicleType: type,
@@ -1382,17 +1425,27 @@ class _HodMachinesEntryScreenState extends State<HodMachinesEntryScreen>
                   if (!(formKey.currentState?.validate() ?? false)) return;
                   try {
                     final saved = await _repository.createSupplier(
-                      siteId: widget.siteId, name: nameCtl.text.trim(), type: type,
-                      phone: phCtl.text.trim(), rating: rating, notes: notesCtl.text.trim(),
+                      siteId: _siteId, name: nameCtl.text.trim(), type: type,
+                      phone: phCtl.text.trim(), rating: rating,
+                      notes: notesCtl.text.trim(),
+                      thavvuPointId: _thavvuPointId,
                       createdBy: _hodIdOrUid,
                     );
                     if (!mounted) return;
                     Navigator.pop(ctx);
                     await _loadData();
-                    setState(() => _selectedSupplier = saved);
+                    // Bind the current site context so the selected supplier
+                    // is recorded against this site even when the catalog row
+                    // originated on another site.
+                    setState(() =>
+                        _selectedSupplier = saved.copyWith(siteId: _siteId));
                     _snack('${saved.name} supplier created.', AppTheme.success);
                   } catch (e) {
-                    _snack(e.toString().replaceFirst('Exception: ', ''), AppTheme.danger);
+                    final raw = e.toString().replaceFirst('Exception: ', '');
+                    final message = raw.contains('23505')
+                        ? 'A supplier with this name already exists for this site.'
+                        : raw;
+                    _snack(message, AppTheme.danger);
                   }
                 },
                 icon: const Icon(Icons.save_outlined), label: const Text('Save Supplier'),
