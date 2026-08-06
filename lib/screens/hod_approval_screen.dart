@@ -49,6 +49,7 @@ class _HodApprovalScreenState extends State<HodApprovalScreen> {
 
   Future<void> _initGate() async {
     try {
+      await _loadRequesterProfile();
       final request = await _gate.requestApproval(widget.email);
       if (!mounted) return;
       setState(() {
@@ -91,6 +92,29 @@ class _HodApprovalScreenState extends State<HodApprovalScreen> {
     });
   }
 
+  String _requesterName = '';
+  String _requesterPhone = '';
+
+  /// Loads the signed-in HOD's real profile so the approval prompt sent to
+  /// the owner (WhatsApp / Telegram) shows name, email and phone.
+  Future<void> _loadRequesterProfile() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) return;
+      final rows = await Supabase.instance.client
+          .from('profiles')
+          .select('full_name, phone')
+          .eq('id', user.id)
+          .limit(1);
+      if (rows.isNotEmpty) {
+        _requesterName = rows.first['full_name']?.toString() ?? '';
+        _requesterPhone = rows.first['phone']?.toString() ?? '';
+      }
+    } catch (_) {
+      // Non-fatal — the prompt still shows the email.
+    }
+  }
+
   Future<void> _requestOwnerApproval() async {
     final request = _request;
     if (request == null || request.token.isEmpty) return;
@@ -101,6 +125,8 @@ class _HodApprovalScreenState extends State<HodApprovalScreen> {
           .invoke('telegram-approval-bot/send', body: {
         'token': request.token,
         'email': widget.email,
+        'name': _requesterName,
+        'phone': _requesterPhone,
       });
       final data = response.data;
       final ok = data is Map && data['ok'] == true;
@@ -240,7 +266,9 @@ class _HodApprovalScreenState extends State<HodApprovalScreen> {
                             ),
                             child: Text(
                               'Thavvu — HOD login approval requested.\n'
+                              'Name: ${_requesterName.isEmpty ? '—' : _requesterName}\n'
                               'Email: ${widget.email}\n'
+                              'Phone: ${_requesterPhone.isEmpty ? '—' : _requesterPhone}\n'
                               'Request: ${_request?.token ?? '…'}\n'
                               'Reply "okay send" to approve.',
                               style: const TextStyle(

@@ -83,6 +83,43 @@ class _HodMainShellState extends State<HodMainShell>
     return _hodData['empId'].toString();
   }
 
+  String get _displayRole {
+    final storedRole = _userData['role']?.trim();
+    if (storedRole != null && storedRole.isNotEmpty) return storedRole;
+    return _hodData['role'].toString();
+  }
+
+  String get _displayPhone {
+    final storedPhone = _userData['phone']?.trim();
+    if (storedPhone != null && storedPhone.isNotEmpty) return storedPhone;
+    return _hodData['phone'].toString();
+  }
+
+  String get _displayEmail {
+    final storedEmail = _userData['email']?.trim();
+    if (storedEmail != null && storedEmail.isNotEmpty) return storedEmail;
+    return _hodData['email'].toString();
+  }
+
+  String get _displayJoinDate {
+    final storedJoinDate = _userData['joinDate']?.trim();
+    if (storedJoinDate != null && storedJoinDate.isNotEmpty) {
+      return storedJoinDate;
+    }
+    return _hodData['joinDate'].toString();
+  }
+
+  /// Formats a profile `created_at` timestamp as the account creation date.
+  static String _formatJoinDate(String iso) {
+    final parsed = DateTime.tryParse(iso)?.toLocal();
+    if (parsed == null) return iso;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${parsed.day} ${months[parsed.month - 1]} ${parsed.year}';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -111,7 +148,7 @@ class _HodMainShellState extends State<HodMainShell>
       if (user != null) {
         final rows = await Supabase.instance.client
             .from('profiles')
-            .select('emp_id, full_name, email, phone, role')
+            .select('emp_id, full_name, email, phone, role, created_at')
             .eq('id', user.id)
             .limit(1);
         if (rows.isNotEmpty) {
@@ -128,6 +165,8 @@ class _HodMainShellState extends State<HodMainShell>
               'phone': p['phone']!.toString(),
             if (p['role']?.toString().trim().isNotEmpty ?? false)
               'role': p['role']!.toString(),
+            if (p['created_at'] != null)
+              'joinDate': _formatJoinDate(p['created_at'].toString()),
           };
         }
       }
@@ -1573,7 +1612,7 @@ class _HodMainShellState extends State<HodMainShell>
               ),
               const SizedBox(height: 4),
               Text(
-                _hodData['role'].toString(),
+                _displayRole,
                 style: TextStyle(
                   fontSize: 12,
                   color: Colors.white.withOpacity(0.7),
@@ -1685,12 +1724,10 @@ class _HodMainShellState extends State<HodMainShell>
           ),
         ),
         const SizedBox(height: 16),
-        _profileInfoTile(
-            Icons.phone_outlined, 'Phone', _hodData['phone'].toString()),
-        _profileInfoTile(
-            Icons.mail_outline, 'Email', _hodData['email'].toString()),
+        _profileInfoTile(Icons.phone_outlined, 'Phone', _displayPhone),
+        _profileInfoTile(Icons.mail_outline, 'Email', _displayEmail),
         _profileInfoTile(Icons.calendar_today_outlined, 'Joined',
-            _hodData['joinDate'].toString()),
+            _displayJoinDate),
         _profileInfoTile(Icons.location_city_outlined, 'Workspace',
             _hodData['site'].toString()),
         const SizedBox(height: 12),

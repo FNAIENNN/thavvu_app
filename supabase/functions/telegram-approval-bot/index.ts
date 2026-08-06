@@ -127,7 +127,27 @@ async function handleSend(req: Request): Promise<Response> {
   const body = await req.json();
   const token = body?.token ?? "";
   const email = body?.email ?? "";
+  let name = body?.name ?? "";
+  let phone = body?.phone ?? "";
   if (!token) return json({ ok: false, error: "missing token" }, 400);
+
+  // Fall back to the profiles table so callers that only send the email
+  // still get the requester's name + phone in the owner prompt.
+  if (email && (!name || !phone)) {
+    try {
+      const { data } = await supabase
+        .from("profiles")
+        .select("full_name, phone")
+        .eq("email", email)
+        .limit(1);
+      if (data && data.length > 0) {
+        name = name || (data[0].full_name as string) || "";
+        phone = phone || (data[0].phone as string) || "";
+      }
+    } catch {
+      // Keep whatever the caller passed; the prompt still works.
+    }
+  }
 
   const chatId = await getOwnerChat();
   if (!chatId) {
@@ -139,7 +159,9 @@ async function handleSend(req: Request): Promise<Response> {
   }
   const text =
     "Thavvu — HOD login approval requested.\n" +
+    `Name: ${name || "—"}\n` +
     `Email: ${email}\n` +
+    `Phone: ${phone || "—"}\n` +
     `Request: ${token}\n` +
     "Reply \"okay send\" to approve.";
   const sent = await sendTelegram(chatId, text);
