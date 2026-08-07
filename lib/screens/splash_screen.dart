@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_store.dart';
 import 'login_screen.dart';
+import 'main_shell.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -73,9 +76,12 @@ class _SplashScreenState extends State<SplashScreen>
     _progressController.forward();
     await Future.delayed(const Duration(milliseconds: 2400));
     if (mounted) {
+      final store = context.read<AppStore>();
+      final loggedIn = store.currentUser != null;
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const LoginScreen(),
+          pageBuilder: (_, __, ___) =>
+              loggedIn ? const MainShell() : const LoginScreen(),
           transitionsBuilder: (_, animation, __, child) => FadeTransition(
             opacity: animation,
             child: child,

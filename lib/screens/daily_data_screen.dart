@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
 import '../widgets/payment_mode_selector.dart';
+import '../providers/app_store.dart';
+import '../models/app_models.dart';
 
 class DailyDataScreen extends StatefulWidget {
   const DailyDataScreen({super.key});
@@ -18,14 +20,7 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
   final TextEditingController _betaController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
   bool _isSubmitting = false;
-
-  final List<Map<String, String>> _machines = [
-    {'id': 'MCH-001', 'name': 'Excavator', 'type': 'Heavy', 'location': 'Site A'},
-    {'id': 'MCH-002', 'name': 'Loader', 'type': 'Medium', 'location': 'Site A'},
-    {'id': 'MCH-003', 'name': 'Crane', 'type': 'Heavy', 'location': 'Site B'},
-    {'id': 'MCH-004', 'name': 'Dump Truck', 'type': 'Medium', 'location': 'Site B'},
-    {'id': 'MCH-005', 'name': 'Compactor', 'type': 'Light', 'location': 'Site C'},
-  ];
+  PaymentMode _paymentMode = PaymentMode.cash;
 
   @override
   void initState() {
@@ -81,7 +76,7 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
     }
   }
 
-  void _submitLog() {
+  Future<void> _submitLog() async {
     if (_selectedMachine == null) {
       _showSnackbar('Please select a machine', AppTheme.danger);
       return;
@@ -91,12 +86,56 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
       return;
     }
 
+    final store = context.read<AppStore>();
+    MachineRecord? machine;
+    try {
+      machine = store.approvedMachines.firstWhere((m) => m.id == _selectedMachine);
+    } catch (_) {
+      machine = null;
+    }
+    if (machine == null) {
+      _showSnackbar('Selected machine not found', AppTheme.danger);
+      return;
+    }
+
     setState(() => _isSubmitting = true);
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() => _isSubmitting = false);
-      _showSnackbar('Daily log saved successfully!', AppTheme.success);
-      _clearForm();
-    });
+
+    final timeBlocks = _timeBlocks
+        .map((b) => TimeBlockData(
+              id: b.id,
+              startHour: b.startTime.hour,
+              startMinute: b.startTime.minute,
+              endHour: b.endTime.hour,
+              endMinute: b.endTime.minute,
+            ))
+        .toList();
+
+    await store.saveDailyLog(
+      machineId: machine.machineId,
+      machineName: machine.displayName,
+      usedAmount: double.tryParse(_usedAmountController.text) ?? 0,
+      dieselAmount: double.tryParse(_dieselController.text) ?? 0,
+      betaAmount: double.tryParse(_betaController.text) ?? 0,
+      notes: _notesController.text.trim(),
+      paymentMode: _paymentModeValue(_paymentMode),
+      timeBlocks: timeBlocks,
+    );
+
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+    _showSnackbar('Daily log saved successfully!', AppTheme.success);
+    _clearForm();
+  }
+
+  String _paymentModeValue(PaymentMode mode) {
+    switch (mode) {
+      case PaymentMode.upi:
+        return 'upi';
+      case PaymentMode.bank:
+        return 'bank';
+      case PaymentMode.cash:
+        return 'cash';
+    }
   }
 
   void _clearForm() {
@@ -104,6 +143,10 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
     _dieselController.clear();
     _betaController.clear();
     _notesController.clear();
+    setState(() {
+      _selectedMachine = null;
+      _paymentMode = PaymentMode.cash;
+    });
   }
 
   void _showSnackbar(String message, Color color) {
@@ -125,10 +168,12 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
       backgroundColor: AppTheme.surface,
       appBar: AppBar(
         title: const Text('Daily Machines Data'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
+        leading: Navigator.canPop(context)
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.pop(context),
+              )
+            : null,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -347,6 +392,7 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
   }
 
   Widget _buildMachineDropdown() {
+    final machines = context.watch<AppStore>().approvedMachines;
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
@@ -360,18 +406,18 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         ),
-        items: _machines.map((machine) {
+        items: machines.map((machine) {
           return DropdownMenuItem(
-            value: machine['id'],
+            value: machine.id,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${machine['name']} (${machine['id']})',
+                  machine.displayName,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
                 Text(
-                  '${machine['type']} • ${machine['location']}',
+                  '${machine.billingType} • Operator: ${machine.operatorName}',
                   style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
                 ),
               ],
@@ -532,7 +578,11 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        const PaymentModeSelector(label: 'Payment Mode'),
+        PaymentModeSelector(
+          label: 'Payment Mode',
+          initialMode: _paymentMode,
+          onChanged: (mode) => setState(() => _paymentMode = mode),
+        ),
       ],
     );
   }
