@@ -1,0 +1,15 @@
+{
+  "name": "Thavvu Supervisor",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "user": "ubuntu",
+  "install": "flutter pub get",
+  "terminals": [
+    {
+      "name": "flutter-web",
+      "command": "flutter run -d web-server --web-port=8080 --web-hostname=0.0.0.0"
+    }
+  ],
+  "ports": [8080]
+}
