@@ -1,20 +1,35 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+import 'api_client.dart';
 import 'db_client.dart';
 
 /// Remote data access against the live Thavvu Supabase schema.
 /// All operations are scoped by site_id / thavvu_point_id / hod_id where relevant.
+///
+/// On web, read/auth traffic goes through [ApiClient] (`/api` Vercel proxy)
+/// because browsers cannot open raw Postgres TCP sockets.
 class RemoteRepository {
-  RemoteRepository({DbClient? client}) : _db = client ?? DbClient.instance;
+  RemoteRepository({DbClient? client, ApiClient? api})
+      : _db = client ?? DbClient.instance,
+        _api = api ?? ApiClient();
 
   final DbClient _db;
+  final ApiClient _api;
   bool available = false;
   String? lastError;
 
+  bool get _useHttp => kIsWeb || !_db.supportsDirectPostgres;
+
   Future<bool> ping() async {
     try {
-      await _db.query('select 1');
-      available = true;
-      lastError = null;
-      return true;
+      if (_useHttp) {
+        available = await _api.ping();
+      } else {
+        await _db.query('select 1');
+        available = true;
+      }
+      lastError = available ? null : 'ping failed';
+      return available;
     } catch (e) {
       available = false;
       lastError = e.toString();
@@ -25,6 +40,9 @@ class RemoteRepository {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>?> login(String email, String password) async {
+    if (_useHttp) {
+      return _api.login(email, password);
+    }
     final row = await _db.mapOne(
       '''
       select p.id, p.emp_id, p.full_name, p.email, p.phone, p.role, p.is_active, p.hod_id,
@@ -57,6 +75,9 @@ class RemoteRepository {
   }
 
   Future<List<Map<String, dynamic>>> thavvuPointsForSite(String siteId) async {
+    if (_useHttp) {
+      return _api.getList('/thavvu-points', query: {'site_id': siteId});
+    }
     return _db.maps(
       '''
       select id, site_id, point_name, assigned_acres, status, hod_id
@@ -83,6 +104,9 @@ class RemoteRepository {
   }
 
   Future<List<Map<String, dynamic>>> allSites({String? hodId}) async {
+    if (_useHttp) {
+      return _api.getList('/sites');
+    }
     if (hodId != null && hodId.isNotEmpty) {
       return _db.maps(
         'select * from sites where hod_id = @hid::uuid or id in (select site_id from site_memberships where profile_id = @hid::uuid) order by name',
@@ -95,6 +119,9 @@ class RemoteRepository {
   // ── Stock catalog & balances ──────────────────────────────────────────────
 
   Future<List<Map<String, dynamic>>> stockItems() async {
+    if (_useHttp) {
+      return _api.getList('/stock-items');
+    }
     return _db.maps('''
       select id, code, name, item_name, category, group_name, uom, primary_uom, reorder_level, is_active
       from stock_items
@@ -108,6 +135,15 @@ class RemoteRepository {
     String? thavvuPointId,
     String? hodId,
   }) async {
+    if (_useHttp) {
+      return _api.getList(
+        '/stock-balances',
+        query: {
+          if (thavvuPointId != null && thavvuPointId.isNotEmpty)
+            'thavvu_point_id': thavvuPointId,
+        },
+      );
+    }
     final filters = <String>[];
     final params = <String, Object?>{};
     if (thavvuPointId != null && thavvuPointId.isNotEmpty) {
@@ -632,6 +668,14 @@ class RemoteRepository {
   // ── Suppliers & payments ──────────────────────────────────────────────────
 
   Future<List<Map<String, dynamic>>> suppliers({String? siteId, String? hodId}) async {
+    if (_useHttp) {
+      return _api.getList(
+        '/suppliers',
+        query: {
+          if (siteId != null) 'site_id': siteId,
+        },
+      );
+    }
     final filters = <String>['coalesce(active, true) = true'];
     final params = <String, Object?>{};
     if (siteId != null) {
@@ -680,6 +724,20 @@ class RemoteRepository {
     String? paymentProof,
     String? hodId,
   }) async {
+    if (_useHttp) {
+      final row = await _api.post('/supplier-payments', {
+        'site_id': siteId,
+        'supplier_name': supplierName,
+        'amount': amount,
+        'bill_amount': billAmount ?? amount,
+        'used_amount': usedAmount ?? 0,
+        'method': method,
+        'request_type': requestType,
+        'payment_proof': paymentProof,
+        'hod_id': hodId,
+      });
+      return row;
+    }
     final rows = await _db.maps(
       '''
       insert into supplier_payment_requests (
@@ -941,6 +999,17 @@ class RemoteRepository {
     String? hodId,
     int limit = 500,
   }) async {
+    if (_useHttp) {
+      return _api.getList(
+        '/activity',
+        query: {
+          if (siteId != null) 'site_id': siteId,
+          if (module != null) 'module': module,
+          if (from != null) 'from': from.toUtc().toIso8601String(),
+          if (to != null) 'to': to.toUtc().toIso8601String().split('T').first,
+        },
+      );
+    }
     final filters = <String>[];
     final params = <String, Object?>{'lim': limit};
     if (siteId != null) {

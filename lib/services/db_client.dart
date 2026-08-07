@@ -1,16 +1,28 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:postgres/postgres.dart';
 import '../config/db_config.dart';
 
 /// Shared Postgres connection to the Thavvu Supabase pooler.
+///
+/// Direct TCP Postgres is not available in browsers. On web, [connect] throws
+/// a clear [UnsupportedError] so [AppStore] can fall back to local/offline mode
+/// (or a future HTTP API proxy). Mobile/desktop keep the live DB connection.
 class DbClient {
   DbClient._();
   static final DbClient instance = DbClient._();
 
   Connection? _conn;
   bool get isConnected => _conn != null;
+  bool get supportsDirectPostgres => !kIsWeb;
 
   Future<Connection> connect() async {
+    if (kIsWeb) {
+      throw UnsupportedError(
+        'Direct Postgres is unavailable on web. Use the native app build, '
+        'or connect through an HTTP API proxy.',
+      );
+    }
     if (_conn != null) return _conn!;
     if (!DbConfig.isConfigured) {
       throw StateError('Database credentials are not configured');
