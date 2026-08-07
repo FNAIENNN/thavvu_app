@@ -46,3 +46,6 @@ coverage/
 lib/config/db_secrets.dart
 .env
 *.pem
+
+# API (Vercel serverless)
+api/node_modules/
