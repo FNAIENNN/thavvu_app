@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/app_models.dart';
+import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
 
@@ -12,20 +15,8 @@ class TasksScreen extends StatefulWidget {
 class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStateMixin {
   String _filter = 'All';
   String _searchQuery = '';
-  bool _isLoading = false;
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
-
-  final List<Map<String, dynamic>> _tasks = [
-    {'title': 'Check diesel levels at Site A', 'type': 'Daily', 'done': false, 'priority': 'high', 'dueDate': 'Today', 'assignedBy': 'HOD Sharma'},
-    {'title': 'Update machine log for MCH-003', 'type': 'Daily', 'done': true, 'priority': 'normal', 'dueDate': 'Yesterday', 'assignedBy': 'HOD Sharma'},
-    {'title': 'Verify operator attendance photos', 'type': 'Daily', 'done': false, 'priority': 'high', 'dueDate': 'Today', 'assignedBy': 'HOD Patel'},
-    {'title': 'Submit weekly stock summary', 'type': 'Weekly', 'done': false, 'priority': 'normal', 'dueDate': 'This Week', 'assignedBy': 'HOD Sharma'},
-    {'title': 'Calibrate equipment at Site B', 'type': 'Weekly', 'done': true, 'priority': 'high', 'dueDate': 'This Week', 'assignedBy': 'HOD Mehta'},
-    {'title': 'Review rental records', 'type': 'Monthly', 'done': false, 'priority': 'normal', 'dueDate': 'End of Month', 'assignedBy': 'HOD Sharma'},
-    {'title': 'Conduct safety inspection', 'type': 'Weekly', 'done': false, 'priority': 'high', 'dueDate': 'Tomorrow', 'assignedBy': 'HOD Patel'},
-    {'title': 'Update stock register', 'type': 'Daily', 'done': false, 'priority': 'normal', 'dueDate': 'Today', 'assignedBy': 'HOD Mehta'},
-  ];
 
   @override
   void initState() {
@@ -47,37 +38,31 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     super.dispose();
   }
 
-  List<Map<String, dynamic>> get _filteredTasks {
-    var tasks = _tasks;
-    
+  List<AppTask> _filteredTasks(List<AppTask> tasks) {
+    var filtered = tasks;
+
     // Apply type filter
     if (_filter != 'All') {
-      tasks = tasks.where((t) => t['type'] == _filter).toList();
+      filtered = filtered.where((t) => t.type == _filter).toList();
     }
-    
+
     // Apply search filter
     if (_searchQuery.isNotEmpty) {
-      tasks = tasks.where((t) => 
-        t['title'].toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        t['assignedBy'].toLowerCase().contains(_searchQuery.toLowerCase())
+      filtered = filtered.where((t) =>
+        t.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+        t.assignedBy.toLowerCase().contains(_searchQuery.toLowerCase())
       ).toList();
     }
-    
-    return tasks;
+
+    return filtered;
   }
 
-  int get _totalCount => _tasks.length;
-  int get _doneCount => _tasks.where((t) => t['done'] == true).length;
-  int get _pendingCount => _totalCount - _doneCount;
-  double get _completionPercentage => _totalCount > 0 ? (_doneCount / _totalCount) * 100 : 0;
-
-  void _toggleTask(Map<String, dynamic> task) {
-    setState(() {
-      task['done'] = !task['done'];
-    });
+  void _toggleTask(AppTask task) {
+    final store = context.read<AppStore>();
+    store.toggleTask(task.id);
     _showSnackbar(
-      task['done'] ? 'Task completed! Great job!' : 'Task marked as pending',
-      task['done'] ? AppTheme.success : AppTheme.warning,
+      !task.done ? 'Task completed! Great job!' : 'Task marked as pending',
+      !task.done ? AppTheme.success : AppTheme.warning,
     );
   }
 
@@ -96,7 +81,12 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    final filteredTasks = _filteredTasks;
+    final tasks = context.watch<AppStore>().checklistTasks;
+    final filteredTasks = _filteredTasks(tasks);
+    final totalCount = tasks.length;
+    final doneCount = tasks.where((t) => t.done).length;
+    final pendingCount = totalCount - doneCount;
+    final completionPercentage = totalCount > 0 ? (doneCount / totalCount) * 100 : 0.0;
 
     return Scaffold(
       backgroundColor: AppTheme.surface,
@@ -122,7 +112,7 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
         child: RefreshIndicator(
           onRefresh: () async {
             setState(() {});
-            await Future.delayed(const Duration(seconds: 1));
+            _showSnackbar('Tasks refreshed', AppTheme.info);
           },
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -132,9 +122,9 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
               children: [
                 _buildHeader(),
                 const SizedBox(height: 20),
-                _buildProgressSection(),
+                _buildProgressSection(completionPercentage, doneCount, pendingCount),
                 const SizedBox(height: 20),
-                _buildStatsRow(),
+                _buildStatsRow(totalCount, doneCount, pendingCount),
                 const SizedBox(height: 16),
                 _buildCategoryTabs(),
                 const SizedBox(height: 16),
@@ -144,7 +134,7 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
                 else
                   ...filteredTasks.map((task) => _buildTaskTile(task)),
                 const SizedBox(height: 16),
-                _buildMotivationalCard(),
+                _buildMotivationalCard(doneCount, completionPercentage),
                 const SizedBox(height: 16),
                 const NoteBox(
                   title: 'Performance Tracking',
@@ -199,7 +189,7 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildProgressSection() {
+  Widget _buildProgressSection(double completionPercentage, int doneCount, int pendingCount) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -223,7 +213,7 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
             children: [
               Expanded(
                 child: Text(
-                  '${_completionPercentage.toStringAsFixed(0)}%',
+                  '${completionPercentage.toStringAsFixed(0)}%',
                   style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
               ),
@@ -237,7 +227,7 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
           ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: LinearProgressIndicator(
-              value: _completionPercentage / 100,
+              value: completionPercentage / 100,
               backgroundColor: Colors.white.withOpacity(0.3),
               valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
               minHeight: 8,
@@ -247,8 +237,8 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('$_doneCount completed', style: const TextStyle(fontSize: 11, color: Colors.white70)),
-              Text('$_pendingCount remaining', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+              Text('$doneCount completed', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+              Text('$pendingCount remaining', style: const TextStyle(fontSize: 11, color: Colors.white70)),
             ],
           ),
         ],
@@ -256,14 +246,14 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildStatsRow() {
+  Widget _buildStatsRow(int totalCount, int doneCount, int pendingCount) {
     return Row(
       children: [
-        _buildStatCard('Total', '$_totalCount', AppTheme.primary, Icons.task_alt),
+        _buildStatCard('Total', '$totalCount', AppTheme.primary, Icons.task_alt),
         const SizedBox(width: 12),
-        _buildStatCard('Completed', '$_doneCount', AppTheme.success, Icons.check_circle),
+        _buildStatCard('Completed', '$doneCount', AppTheme.success, Icons.check_circle),
         const SizedBox(width: 12),
-        _buildStatCard('Pending', '$_pendingCount', AppTheme.warning, Icons.pending),
+        _buildStatCard('Pending', '$pendingCount', AppTheme.warning, Icons.pending),
       ],
     );
   }
@@ -372,12 +362,12 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildTaskTile(Map<String, dynamic> task) {
-    final isDone = task['done'] as bool;
-    final type = task['type'] as String;
-    final priority = task['priority'] as String;
-    final dueDate = task['dueDate'] as String;
-    final assignedBy = task['assignedBy'] as String;
+  Widget _buildTaskTile(AppTask task) {
+    final isDone = task.done;
+    final type = task.type;
+    final priority = task.priority;
+    final dueDate = task.dueDate;
+    final assignedBy = task.assignedBy;
 
     Color typeColor = type == 'Daily' ? AppTheme.info : 
                      type == 'Weekly' ? AppTheme.success : 
@@ -429,7 +419,7 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        task['title'],
+                        task.title,
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -583,18 +573,18 @@ class _TasksScreenState extends State<TasksScreen> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildMotivationalCard() {
-    if (_doneCount == 0) return const SizedBox();
+  Widget _buildMotivationalCard(int doneCount, double completionPercentage) {
+    if (doneCount == 0) return const SizedBox();
     
     String message;
     IconData icon;
     Color color;
     
-    if (_completionPercentage >= 80) {
+    if (completionPercentage >= 80) {
       message = "Excellent! You're crushing your goals! 🎉";
       icon = Icons.celebration;
       color = AppTheme.success;
-    } else if (_completionPercentage >= 50) {
+    } else if (completionPercentage >= 50) {
       message = "Great progress! Keep up the momentum! 💪";
       icon = Icons.rocket_launch;
       color = AppTheme.info;

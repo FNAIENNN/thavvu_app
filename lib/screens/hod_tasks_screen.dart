@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/app_models.dart';
+import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
 
 class HODTasksScreen extends StatefulWidget {
   const HODTasksScreen({super.key});
@@ -15,82 +17,6 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
   late TabController _tabController;
   late AnimationController _animationController;
   
-  // HOD Assigned Tasks
-  final List<Map<String, dynamic>> _hodTasks = [
-    {
-      'id': 'HT-001',
-      'title': 'Complete safety inspection at Site A',
-      'description': 'Inspect all safety equipment and submit report',
-      'type': 'Daily',
-      'priority': 'high',
-      'assignedBy': 'HOD Sharma',
-      'assignedDate': '2024-05-13',
-      'dueDate': 'Today',
-      'completed': false,
-      'points': 50,
-    },
-    {
-      'id': 'HT-002',
-      'title': 'Submit weekly fuel consumption report',
-      'description': 'Compile diesel usage data from all machines',
-      'type': 'Weekly',
-      'priority': 'normal',
-      'assignedBy': 'HOD Sharma',
-      'assignedDate': '2024-05-12',
-      'dueDate': 'This Week',
-      'completed': false,
-      'points': 30,
-    },
-    {
-      'id': 'HT-003',
-      'title': 'Update machine maintenance log',
-      'description': 'Record all maintenance activities for MCH-003',
-      'type': 'Daily',
-      'priority': 'high',
-      'assignedBy': 'HOD Patel',
-      'assignedDate': '2024-05-13',
-      'dueDate': 'Today',
-      'completed': true,
-      'points': 40,
-    },
-    {
-      'id': 'HT-004',
-      'title': 'Monthly stock audit',
-      'description': 'Verify physical stock with system records',
-      'type': 'Monthly',
-      'priority': 'normal',
-      'assignedBy': 'HOD Mehta',
-      'assignedDate': '2024-05-01',
-      'dueDate': 'End of Month',
-      'completed': false,
-      'points': 100,
-    },
-    {
-      'id': 'HT-005',
-      'title': 'Site B equipment calibration',
-      'description': 'Calibrate all heavy equipment at Site B',
-      'type': 'Weekly',
-      'priority': 'high',
-      'assignedBy': 'HOD Sharma',
-      'assignedDate': '2024-05-11',
-      'dueDate': 'Tomorrow',
-      'completed': false,
-      'points': 75,
-    },
-    {
-      'id': 'HT-006',
-      'title': 'Submit worker attendance summary',
-      'description': 'Weekly attendance report for all workers',
-      'type': 'Weekly',
-      'priority': 'normal',
-      'assignedBy': 'HOD Patel',
-      'assignedDate': '2024-05-10',
-      'dueDate': 'This Week',
-      'completed': true,
-      'points': 25,
-    },
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -109,37 +35,31 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
     super.dispose();
   }
 
-  List<Map<String, dynamic>> get _filteredTasks {
-    var tasks = _hodTasks;
-    
+  List<AppTask> _filteredTasks(List<AppTask> tasks) {
+    var filtered = tasks;
+
     if (_filter != 'All') {
-      tasks = tasks.where((t) => t['type'] == _filter).toList();
+      filtered = filtered.where((t) => t.type == _filter).toList();
     }
-    
+
     if (_searchQuery.isNotEmpty) {
-      tasks = tasks.where((t) => 
-        t['title'].toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        t['assignedBy'].toLowerCase().contains(_searchQuery.toLowerCase())
+      filtered = filtered.where((t) =>
+        t.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+        t.assignedBy.toLowerCase().contains(_searchQuery.toLowerCase())
       ).toList();
     }
-    
-    return tasks;
+
+    return filtered;
   }
 
-  int get _totalPoints => _hodTasks.where((t) => t['completed'] == true).fold(0, (sum, t) => sum + (t['points'] as int));
-  int get _completedCount => _hodTasks.where((t) => t['completed'] == true).length;
-  int get _pendingCount => _hodTasks.length - _completedCount;
-  double get _completionPercentage => _hodTasks.length > 0 ? (_completedCount / _hodTasks.length) * 100 : 0;
-
-  void _toggleTask(Map<String, dynamic> task) {
-    setState(() {
-      task['completed'] = !task['completed'];
-    });
+  void _toggleTask(AppTask task) {
+    final store = context.read<AppStore>();
+    store.toggleTask(task.id);
     _showSnackbar(
-      task['completed'] 
-        ? 'Task completed! +${task['points']} points earned!' 
+      !task.done
+        ? 'Task completed! +${task.points} points earned!'
         : 'Task marked as pending',
-      task['completed'] ? AppTheme.success : AppTheme.warning,
+      !task.done ? AppTheme.success : AppTheme.warning,
     );
   }
 
@@ -158,6 +78,7 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
 
   @override
   Widget build(BuildContext context) {
+    final hodTasks = context.watch<AppStore>().hodTasks;
     return Scaffold(
       backgroundColor: AppTheme.surface,
       appBar: AppBar(
@@ -191,19 +112,21 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
       body: TabBarView(
         controller: _tabController,
         children: [
-          _buildTasksTab(),
-          _buildPerformanceTab(),
+          _buildTasksTab(hodTasks),
+          _buildPerformanceTab(hodTasks),
         ],
       ),
     );
   }
 
-  Widget _buildTasksTab() {
-    final filteredTasks = _filteredTasks;
+  Widget _buildTasksTab(List<AppTask> hodTasks) {
+    final filteredTasks = _filteredTasks(hodTasks);
+    final completedCount = hodTasks.where((t) => t.done).length;
+    final totalPoints = hodTasks.where((t) => t.done).fold(0, (sum, t) => sum + t.points);
 
     return Column(
       children: [
-        _buildStatsBar(),
+        _buildStatsBar(hodTasks.length, completedCount, totalPoints),
         _buildFilterBar(),
         Expanded(
           child: filteredTasks.isEmpty
@@ -218,7 +141,7 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
     );
   }
 
-  Widget _buildStatsBar() {
+  Widget _buildStatsBar(int totalTasks, int completedCount, int totalPoints) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -227,11 +150,11 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
       ),
       child: Row(
         children: [
-          _buildStatItem('Tasks', '${_hodTasks.length}', Icons.task_alt),
+          _buildStatItem('Tasks', '$totalTasks', Icons.task_alt),
           Container(width: 1, height: 30, color: Colors.white24),
-          _buildStatItem('Completed', '$_completedCount', Icons.check_circle),
+          _buildStatItem('Completed', '$completedCount', Icons.check_circle),
           Container(width: 1, height: 30, color: Colors.white24),
-          _buildStatItem('Points', '$_totalPoints', Icons.star),
+          _buildStatItem('Points', '$totalPoints', Icons.star),
         ],
       ),
     );
@@ -303,11 +226,11 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
     );
   }
 
-  Widget _buildTaskCard(Map<String, dynamic> task) {
-    final isCompleted = task['completed'] as bool;
-    final type = task['type'] as String;
-    final priority = task['priority'] as String;
-    final dueDate = task['dueDate'] as String;
+  Widget _buildTaskCard(AppTask task) {
+    final isCompleted = task.done;
+    final type = task.type;
+    final priority = task.priority;
+    final dueDate = task.dueDate;
 
     Color typeColor = type == 'Daily' ? AppTheme.info : 
                      type == 'Weekly' ? AppTheme.success : 
@@ -352,7 +275,7 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        task['title'],
+                        task.title,
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -373,7 +296,7 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  task['description'],
+                  task.description ?? '',
                   style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
                 ),
                 const SizedBox(height: 8),
@@ -381,11 +304,10 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    _buildChip(Icons.person_outline, task['assignedBy']),
-                    _buildChip(Icons.calendar_today, task['assignedDate']),
+                    _buildChip(Icons.person_outline, task.assignedBy),
                     _buildDueDateChip(dueDate),
                     if (priority == 'high') _buildPriorityChip(),
-                    _buildPointsChip(task['points']),
+                    _buildPointsChip(task.points),
                   ],
                 ),
               ],
@@ -469,7 +391,12 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
     );
   }
 
-  Widget _buildPerformanceTab() {
+  Widget _buildPerformanceTab(List<AppTask> hodTasks) {
+    final completedCount = hodTasks.where((t) => t.done).length;
+    final pendingCount = hodTasks.length - completedCount;
+    final completionPercentage = hodTasks.isNotEmpty ? (completedCount / hodTasks.length) * 100 : 0.0;
+    final totalPoints = hodTasks.where((t) => t.done).fold(0, (sum, t) => sum + t.points);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -477,13 +404,13 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
         children: [
           _buildPerformanceHeader(),
           const SizedBox(height: 20),
-          _buildProgressCard(),
+          _buildProgressCard(completionPercentage, completedCount, pendingCount),
           const SizedBox(height: 20),
-          _buildTaskBreakdown(),
+          _buildTaskBreakdown(hodTasks),
           const SizedBox(height: 20),
           _buildRecentAchievements(),
           const SizedBox(height: 20),
-          _buildLeaderboardCard(),
+          _buildLeaderboardCard(totalPoints),
         ],
       ),
     );
@@ -519,7 +446,7 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
     );
   }
 
-  Widget _buildProgressCard() {
+  Widget _buildProgressCard(double completionPercentage, int completedCount, int pendingCount) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -539,7 +466,7 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
             children: [
               Expanded(
                 child: Text(
-                  '${_completionPercentage.toStringAsFixed(0)}%',
+                  '${completionPercentage.toStringAsFixed(0)}%',
                   style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
               ),
@@ -550,7 +477,7 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
           ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: LinearProgressIndicator(
-              value: _completionPercentage / 100,
+              value: completionPercentage / 100,
               backgroundColor: Colors.white.withOpacity(0.3),
               valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
               minHeight: 8,
@@ -560,8 +487,8 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('$_completedCount completed', style: const TextStyle(fontSize: 11, color: Colors.white70)),
-              Text('$_pendingCount remaining', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+              Text('$completedCount completed', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+              Text('$pendingCount remaining', style: const TextStyle(fontSize: 11, color: Colors.white70)),
             ],
           ),
         ],
@@ -569,13 +496,13 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
     );
   }
 
-  Widget _buildTaskBreakdown() {
-    final dailyCount = _hodTasks.where((t) => t['type'] == 'Daily').length;
-    final weeklyCount = _hodTasks.where((t) => t['type'] == 'Weekly').length;
-    final monthlyCount = _hodTasks.where((t) => t['type'] == 'Monthly').length;
-    final dailyCompleted = _hodTasks.where((t) => t['type'] == 'Daily' && t['completed'] == true).length;
-    final weeklyCompleted = _hodTasks.where((t) => t['type'] == 'Weekly' && t['completed'] == true).length;
-    final monthlyCompleted = _hodTasks.where((t) => t['type'] == 'Monthly' && t['completed'] == true).length;
+  Widget _buildTaskBreakdown(List<AppTask> hodTasks) {
+    final dailyCount = hodTasks.where((t) => t.type == 'Daily').length;
+    final weeklyCount = hodTasks.where((t) => t.type == 'Weekly').length;
+    final monthlyCount = hodTasks.where((t) => t.type == 'Monthly').length;
+    final dailyCompleted = hodTasks.where((t) => t.type == 'Daily' && t.done).length;
+    final weeklyCompleted = hodTasks.where((t) => t.type == 'Weekly' && t.done).length;
+    final monthlyCompleted = hodTasks.where((t) => t.type == 'Monthly' && t.done).length;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -684,9 +611,9 @@ class _HODTasksScreenState extends State<HODTasksScreen> with TickerProviderStat
     );
   }
 
-  Widget _buildLeaderboardCard() {
+  Widget _buildLeaderboardCard(int totalPoints) {
     final topPerformers = [
-      {'rank': 1, 'name': 'You', 'points': _totalPoints, 'badge': '🥇'},
+      {'rank': 1, 'name': 'You', 'points': totalPoints, 'badge': '🥇'},
       {'rank': 2, 'name': 'Rahul S.', 'points': 185, 'badge': '🥈'},
       {'rank': 3, 'name': 'Priya M.', 'points': 150, 'badge': '🥉'},
     ];

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:provider/provider.dart';
+import '../models/app_models.dart';
+import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
 
 class MapsScreen extends StatefulWidget {
   const MapsScreen({super.key});
@@ -16,53 +18,20 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
   late Animation<double> _fadeAnimation;
   
   // Map related variables
+  // Controller retained for future camera moves / fit-bounds.
+  // ignore: unused_field
   GoogleMapController? _mapController;
-  final Set<Marker> _markers = {};
   final Set<Polygon> _polygons = {};
   final Set<Polyline> _polylines = {};
   
-  String _selectedMapType = 'Standard';
-  bool _isLoading = true;
-  
-  // Mock location points from HOD
-  final List<Map<String, dynamic>> _locationPoints = [
-    {
-      'id': 'LOC-001',
-      'name': 'Site A - Main Office',
-      'latitude': 28.6139,
-      'longitude': 77.2090,
-      'type': 'office',
-      'status': 'active',
-      'lastUpdated': '2024-05-13',
-    },
-    {
-      'id': 'LOC-002',
-      'name': 'Site B - Warehouse',
-      'latitude': 28.6120,
-      'longitude': 77.2105,
-      'type': 'warehouse',
-      'status': 'active',
-      'lastUpdated': '2024-05-13',
-    },
-    {
-      'id': 'LOC-003',
-      'name': 'Site C - Field Office',
-      'latitude': 28.6145,
-      'longitude': 77.2080,
-      'type': 'field',
-      'status': 'active',
-      'lastUpdated': '2024-05-12',
-    },
-    {
-      'id': 'LOC-004',
-      'name': 'Equipment Depot',
-      'latitude': 28.6155,
-      'longitude': 77.2110,
-      'type': 'depot',
-      'status': 'inactive',
-      'lastUpdated': '2024-05-10',
-    },
-  ];
+  String _selectedMapType = 'normal';
+
+  static const Map<String, MapType> _mapTypeOptions = {
+    'normal': MapType.normal,
+    'satellite': MapType.satellite,
+    'terrain': MapType.terrain,
+    'hybrid': MapType.hybrid,
+  };
 
   @override
   void initState() {
@@ -77,8 +46,6 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
       curve: Curves.easeOut,
     );
     _animationController.forward();
-    
-    _initializeMarkers();
   }
 
   @override
@@ -88,33 +55,34 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  void _initializeMarkers() {
-    for (var point in _locationPoints) {
-      final marker = Marker(
-        markerId: MarkerId(point['id']),
-        position: LatLng(point['latitude'], point['longitude']),
+  Set<Marker> _buildMarkers(List<MapLocation> locations) {
+    return locations.map((point) {
+      return Marker(
+        markerId: MarkerId(point.id),
+        position: LatLng(point.lat, point.lng),
         infoWindow: InfoWindow(
-          title: point['name'],
-          snippet: 'Type: ${point['type']}\nStatus: ${point['status']}\nUpdated: ${point['lastUpdated']}',
+          title: point.title,
+          snippet: '${point.category} · ${point.description}',
         ),
-        icon: _getMarkerIcon(point['type'], point['status']),
+        icon: _getMarkerIcon(point.category),
       );
-      _markers.add(marker);
-    }
-    setState(() => _isLoading = false);
+    }).toSet();
   }
 
-  BitmapDescriptor _getMarkerIcon(String type, String status) {
-    return BitmapDescriptor.defaultMarkerWithHue(
-      status == 'active' ? BitmapDescriptor.hueGreen : BitmapDescriptor.hueRed,
-    );
+  BitmapDescriptor _getMarkerIcon(String category) {
+    final hue = switch (category) {
+      'warehouse' => BitmapDescriptor.hueOrange,
+      'office' => BitmapDescriptor.hueAzure,
+      _ => BitmapDescriptor.hueGreen,
+    };
+    return BitmapDescriptor.defaultMarkerWithHue(hue);
   }
 
-  void _refreshMap() {
-    setState(() {
-      _markers.clear();
-      _initializeMarkers();
-    });
+  Future<void> _refreshMap() async {
+    final store = context.read<AppStore>();
+    await store.syncMapLocations();
+    if (!mounted) return;
+    setState(() {});
     _showSnackbar('Map refreshed with latest data from HOD', AppTheme.success);
   }
 
@@ -132,6 +100,7 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    final mapLocations = context.watch<AppStore>().mapLocations;
     return Scaffold(
       backgroundColor: AppTheme.surface,
       appBar: AppBar(
@@ -164,29 +133,30 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
         child: TabBarView(
           controller: _tabController,
           children: [
-            _buildMapTab(),
-            _buildSpecificationsTab(),
+            _buildMapTab(mapLocations),
+            _buildSpecificationsTab(mapLocations),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildMapTab() {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+  Widget _buildMapTab(List<MapLocation> mapLocations) {
+    final initialTarget = mapLocations.isNotEmpty
+        ? LatLng(mapLocations.first.lat, mapLocations.first.lng)
+        : const LatLng(13.0827, 80.2707);
 
     return Column(
       children: [
         _buildMapControls(),
         Expanded(
           child: GoogleMap(
-            initialCameraPosition: const CameraPosition(
-              target: LatLng(28.6139, 77.2090),
-              zoom: 14.0,
+            initialCameraPosition: CameraPosition(
+              target: initialTarget,
+              zoom: 13.0,
             ),
-            markers: _markers,
+            mapType: _mapTypeOptions[_selectedMapType] ?? MapType.normal,
+            markers: _buildMarkers(mapLocations),
             polygons: _polygons,
             polylines: _polylines,
             onMapCreated: (controller) => _mapController = controller,
@@ -222,10 +192,10 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
                 child: DropdownButton<String>(
                   value: _selectedMapType,
                   isExpanded: true,
-                  items: ['Standard', 'Satellite', 'Terrain'].map((type) {
+                  items: _mapTypeOptions.keys.map((type) {
                     return DropdownMenuItem(
                       value: type,
-                      child: Text(type),
+                      child: Text(type[0].toUpperCase() + type.substring(1)),
                     );
                   }).toList(),
                   onChanged: (value) {
@@ -298,7 +268,7 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildSpecificationsTab() {
+  Widget _buildSpecificationsTab(List<MapLocation> mapLocations) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -308,7 +278,7 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
           const SizedBox(height: 20),
           _buildInfoCard(),
           const SizedBox(height: 20),
-          _buildSpecificationsList(),
+          _buildSpecificationsList(mapLocations),
           const SizedBox(height: 20),
           _buildUpdateInfo(),
         ],
@@ -380,12 +350,14 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildSpecificationsList() {
+  Widget _buildSpecificationsList(List<MapLocation> mapLocations) {
+    final siteCount = mapLocations.where((l) => l.category == 'site').length;
+    final warehouseCount = mapLocations.where((l) => l.category == 'warehouse').length;
     final specifications = [
-      {'title': 'Total Active Sites', 'value': '3', 'icon': Icons.location_on, 'color': AppTheme.success},
-      {'title': 'Total Inactive Sites', 'value': '1', 'icon': Icons.location_off, 'color': AppTheme.danger},
-      {'title': 'Last Updated', 'value': '2024-05-13 09:30 AM', 'icon': Icons.update, 'color': AppTheme.info},
-      {'title': 'Total Area Covered', 'value': '245 sq km', 'icon': Icons.area_chart, 'color': AppTheme.warning},
+      {'title': 'Total Locations', 'value': '${mapLocations.length}', 'icon': Icons.location_on, 'color': AppTheme.success},
+      {'title': 'Sites', 'value': '$siteCount', 'icon': Icons.location_city, 'color': AppTheme.info},
+      {'title': 'Warehouses', 'value': '$warehouseCount', 'icon': Icons.warehouse, 'color': AppTheme.warning},
+      {'title': 'Last Updated', 'value': 'Just now', 'icon': Icons.update, 'color': AppTheme.info},
     ];
 
     return Column(

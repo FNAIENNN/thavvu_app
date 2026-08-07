@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_store.dart';
 import 'main_shell.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -17,6 +19,16 @@ class _LoginScreenState extends State<LoginScreen>
   bool _obscurePassword = true;
   bool _isLoading = false;
   bool _rememberMe = false;
+
+  // Create-account form controllers (must live on State, not be recreated per build).
+  final _createNameController = TextEditingController();
+  final _createEmpIdController = TextEditingController();
+  final _createPhoneController = TextEditingController();
+  final _createSiteController = TextEditingController();
+  final _createPasswordController = TextEditingController();
+  final _createConfirmPasswordController = TextEditingController();
+  bool _obscureCreatePassword = true;
+  bool _obscureConfirmPassword = true;
 
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -45,8 +57,18 @@ class _LoginScreenState extends State<LoginScreen>
     ).animate(CurvedAnimation(
       parent: _animController,
       curve: Curves.easeOut,
-    ));
+    )); 
     _animController.forward();
+
+    // Auto-navigate if a session is already active.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final store = context.read<AppStore>();
+      if (store.currentUser != null && mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const MainShell()),
+        );
+      }
+    });
   }
 
   @override
@@ -54,6 +76,12 @@ class _LoginScreenState extends State<LoginScreen>
     _animController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _createNameController.dispose();
+    _createEmpIdController.dispose();
+    _createPhoneController.dispose();
+    _createSiteController.dispose();
+    _createPasswordController.dispose();
+    _createConfirmPasswordController.dispose();
     super.dispose();
   }
 
@@ -66,43 +94,86 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1800));
-    if (mounted) {
-      setState(() => _isLoading = false);
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const MainShell(),
-          transitionsBuilder: (_, animation, __, child) => FadeTransition(
-            opacity: animation,
-            child: child,
-          ),
-          transitionDuration: const Duration(milliseconds: 400),
-        ),
-      );
+    final store = context.read<AppStore>();
+    final error = await store.login(
+      _emailController.text.trim(),
+      _passwordController.text,
+      remember: _rememberMe,
+    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    if (error != null) {
+      _showSnackbar(error, const Color(0xFFE53935));
+      return;
     }
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => const MainShell(),
+        transitionsBuilder: (_, animation, __, child) => FadeTransition(
+          opacity: animation,
+          child: child,
+        ),
+        transitionDuration: const Duration(milliseconds: 400),
+      ),
+    );
   }
 
   Future<void> _handleForgotPassword() async {
     if (_emailController.text.isEmpty) return;
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (mounted) {
-      setState(() => _isLoading = false);
-      _showSnackbar('Reset link sent to ${_emailController.text}',
-          const Color(0xFF0FA37A));
-      _switchView(0);
+    final store = context.read<AppStore>();
+    final error = await store.requestPasswordReset(_emailController.text.trim());
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    if (error != null) {
+      _showSnackbar(error, const Color(0xFFE53935));
+      return;
     }
+    _showSnackbar('Reset link sent to ${_emailController.text}',
+        const Color(0xFF0FA37A));
+    _switchView(0);
   }
 
   Future<void> _handleCreateAccount() async {
-    setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (mounted) {
-      setState(() => _isLoading = false);
-      _showSnackbar('Account created! Pending HOD approval.',
-          const Color(0xFF0FA37A));
-      _switchView(0);
+    if (_createNameController.text.isEmpty) {
+      _showSnackbar('Please enter your full name', const Color(0xFFE53935));
+      return;
     }
+    if (_emailController.text.isEmpty || !_emailController.text.contains('@')) {
+      _showSnackbar('Please enter a valid email', const Color(0xFFE53935));
+      return;
+    }
+    if (_createPasswordController.text.length < 6) {
+      _showSnackbar('Password must be at least 6 characters', const Color(0xFFE53935));
+      return;
+    }
+    if (_createPasswordController.text != _createConfirmPasswordController.text) {
+      _showSnackbar('Passwords do not match', const Color(0xFFE53935));
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    final store = context.read<AppStore>();
+    final error = await store.createAccount(
+      name: _createNameController.text.trim(),
+      email: _emailController.text.trim(),
+      password: _createPasswordController.text,
+      phone: _createPhoneController.text.trim(),
+    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    if (error != null) {
+      _showSnackbar(error, const Color(0xFFE53935));
+      return;
+    }
+    _showSnackbar('Account created! Pending HOD approval.',
+        const Color(0xFF0FA37A));
+    _createNameController.clear();
+    _createPhoneController.clear();
+    _createPasswordController.clear();
+    _createConfirmPasswordController.clear();
+    _emailController.clear();
+    _switchView(0);
   }
 
   void _showSnackbar(String message, Color color) {
@@ -380,6 +451,24 @@ class _LoginScreenState extends State<LoginScreen>
             ),
           ),
         ),
+        const SizedBox(height: 10),
+        Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1976D2).withOpacity(0.08),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Text(
+              'Demo login: rajesh@thavvu.com / password',
+              style: TextStyle(
+                fontSize: 10,
+                color: Color(0xFF1976D2),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -468,12 +557,6 @@ class _LoginScreenState extends State<LoginScreen>
 
   // ─── CREATE ACCOUNT FORM ───────────────────────────────────────
   Widget _buildCreateAccountForm() {
-    final nameCtrl = TextEditingController();
-    final empIdCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final siteCtrl = TextEditingController();
-    final createPassCtrl = TextEditingController();
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -506,21 +589,21 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         const SizedBox(height: 24),
         _buildInputField(
-          controller: nameCtrl,
+          controller: _createNameController,
           label: 'Full Name',
           hint: 'Rajesh Kumar',
           icon: Icons.person_outline,
         ),
         const SizedBox(height: 14),
         _buildInputField(
-          controller: empIdCtrl,
+          controller: _createEmpIdController,
           label: 'Employee ID',
           hint: 'EMP001',
           icon: Icons.badge_outlined,
         ),
         const SizedBox(height: 14),
         _buildInputField(
-          controller: phoneCtrl,
+          controller: _createPhoneController,
           label: 'Phone Number',
           hint: '+91 98765 43210',
           icon: Icons.phone_outlined,
@@ -528,7 +611,7 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         const SizedBox(height: 14),
         _buildInputField(
-          controller: siteCtrl,
+          controller: _createSiteController,
           label: 'Site / Stock Point',
           hint: 'Site A - Chennai',
           icon: Icons.location_on_outlined,
@@ -543,11 +626,35 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         const SizedBox(height: 14),
         _buildInputField(
-          controller: createPassCtrl,
+          controller: _createPasswordController,
           label: 'Create Password',
           hint: 'Minimum 6 characters',
           icon: Icons.lock_outline,
-          obscure: true,
+          obscure: _obscureCreatePassword,
+          suffixIcon: IconButton(
+            icon: Icon(
+              _obscureCreatePassword ? Icons.visibility_off : Icons.visibility,
+              size: 20,
+              color: Colors.grey.shade400,
+            ),
+            onPressed: () => setState(() => _obscureCreatePassword = !_obscureCreatePassword),
+          ),
+        ),
+        const SizedBox(height: 14),
+        _buildInputField(
+          controller: _createConfirmPasswordController,
+          label: 'Confirm Password',
+          hint: 'Re-enter your password',
+          icon: Icons.lock_outline,
+          obscure: _obscureConfirmPassword,
+          suffixIcon: IconButton(
+            icon: Icon(
+              _obscureConfirmPassword ? Icons.visibility_off : Icons.visibility,
+              size: 20,
+              color: Colors.grey.shade400,
+            ),
+            onPressed: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+          ),
         ),
         const SizedBox(height: 20),
         Container(

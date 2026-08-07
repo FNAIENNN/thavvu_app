@@ -1,11 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'providers/app_store.dart';
 import 'screens/splash_screen.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  runApp(const ThavvuSupervisorApp());
+  final store = AppStore();
+  await store.init();
+  runApp(
+    ChangeNotifierProvider.value(
+      value: store,
+      child: const ThavvuSupervisorApp(),
+    ),
+  );
 }
 
 class ThavvuSupervisorApp extends StatelessWidget {

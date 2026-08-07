@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
 import '../widgets/payment_mode_selector.dart';
 import '../widgets/photo_capture_card.dart';
+import '../providers/app_store.dart';
 
 class MachinesEntryScreen extends StatefulWidget {
   const MachinesEntryScreen({super.key});
@@ -28,6 +30,8 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
   String? _selectedBillingType;
   String? _selectedDieselInclusion;
   bool _isSubmitting = false;
+  PaymentMode _paymentMode = PaymentMode.cash;
+  bool _photoCaptured = false;
 
   final List<String> _vehicleTypes = ['Poclain', 'Tractor', 'Dozer', 'Excavator', 'Loader'];
   final List<String> _billingTypes = ['Hourly', 'Daily', 'Weekly'];
@@ -47,7 +51,7 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
     super.dispose();
   }
 
-  void _submitForm() {
+  Future<void> _submitForm() async {
     // Validation
     if (_machineIdController.text.isEmpty) {
       _showSnackbar('Please enter Machine ID', AppTheme.danger);
@@ -75,13 +79,39 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
     }
 
     setState(() => _isSubmitting = true);
-    
-    // Simulate API call
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() => _isSubmitting = false);
-      _showSnackbar('Machine submitted for HOD approval!', AppTheme.success);
-      _clearForm();
-    });
+
+    final store = context.read<AppStore>();
+    final machine = await store.submitMachine(
+      machineId: _machineIdController.text.trim(),
+      operatorName: _operatorNameController.text.trim(),
+      vehicleNumber: _vehicleNumberController.text.trim(),
+      vehicleType: _selectedVehicleType!,
+      billingType: _selectedBillingType!,
+      workingAmount: double.tryParse(_amountController.text) ?? 0,
+      paymentMode: _paymentModeValue(_paymentMode),
+      dieselAmount: double.tryParse(_dieselController.text) ?? 0,
+      usedAmount: double.tryParse(_usedAmountController.text) ?? 0,
+      dieselInclusion: _selectedDieselInclusion,
+      supplierName: _supplierNameController.text.trim(),
+      supplierAmount: double.tryParse(_supplierAmountController.text) ?? 0,
+      notes: _notesController.text.trim(),
+    );
+
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+    _showSnackbar('Machine ${machine.machineId} submitted for HOD approval!', AppTheme.success);
+    _clearForm();
+  }
+
+  String _paymentModeValue(PaymentMode mode) {
+    switch (mode) {
+      case PaymentMode.upi:
+        return 'upi';
+      case PaymentMode.bank:
+        return 'bank';
+      case PaymentMode.cash:
+        return 'cash';
+    }
   }
 
   void _clearForm() {
@@ -98,6 +128,8 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
       _selectedVehicleType = null;
       _selectedBillingType = null;
       _selectedDieselInclusion = null;
+      _paymentMode = PaymentMode.cash;
+      _photoCaptured = false;
     });
   }
 
@@ -120,10 +152,12 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
       backgroundColor: AppTheme.surface,
       appBar: AppBar(
         title: const Text('New Machines Entry'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
+        leading: Navigator.canPop(context)
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.pop(context),
+              )
+            : null,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -559,7 +593,11 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
       children: [
         _buildTextField('Working amount (₹)', keyboardType: TextInputType.number, controller: _amountController),
         const SizedBox(height: 12),
-        const PaymentModeSelector(label: 'Payment Mode'),
+        PaymentModeSelector(
+          label: 'Payment Mode',
+          initialMode: _paymentMode,
+          onChanged: (mode) => setState(() => _paymentMode = mode),
+        ),
       ],
     );
   }
@@ -595,9 +633,17 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
   }
 
   Widget _buildPhotoCard() {
-    return const PhotoCaptureCard(
+    return PhotoCaptureCard(
       label: 'Driver + vehicle opening photo',
+      hint: _photoCaptured ? 'Photo captured ✓' : 'Tap to capture',
       mandatory: true,
+      onTap: () {
+        setState(() => _photoCaptured = !_photoCaptured);
+        _showSnackbar(
+          _photoCaptured ? 'Opening photo captured' : 'Photo removed',
+          _photoCaptured ? AppTheme.success : AppTheme.warning,
+        );
+      },
     );
   }
 

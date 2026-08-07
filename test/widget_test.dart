@@ -1,30 +1,62 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:thavvu_supervisor/main.dart';
+import 'package:thavvu_supervisor/providers/app_store.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  TestWidgetsFlutterBinding.ensureInitialized();
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+  test('AppStore seeds data and persists workflows', () async {
+    final store = AppStore();
+    await store.init();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(store.users, isNotEmpty);
+    expect(store.approvedMachines, isNotEmpty);
+    expect(store.stockPoints, isNotEmpty);
+
+    final loginError = await store.login('rajesh@thavvu.com', 'password', remember: true);
+    expect(loginError, isNull);
+    expect(store.currentUser?.email, 'rajesh@thavvu.com');
+
+    final machine = await store.submitMachine(
+      machineId: 'MCH-TEST',
+      operatorName: 'Tester',
+      vehicleNumber: 'TN-99-ZZ-0001',
+      vehicleType: 'Excavator',
+      billingType: 'Hourly',
+      workingAmount: 1000,
+    );
+    expect(machine.status, 'pending');
+    await store.approveMachine(machine.id);
+    expect(store.approvedMachines.any((m) => m.machineId == 'MCH-TEST'), isTrue);
+
+    final beforeStock = store.stockPoints.first.remaining;
+    final transfer = await store.initiateTransfer(
+      fromPoint: store.stockPoints.first.name,
+      toPoint: store.stockPoints[1].name,
+      item: 'Diesel',
+      quantity: 5,
+    );
+    expect(transfer, isNotNull);
+    expect(store.stockPoints.first.remaining, beforeStock - 5);
+    await store.acknowledgeTransfer(transfer!.id);
+    expect(store.transfers.first.status, 'completed');
+
+    final rental = await store.openRental(item: 'Mixer', billingMode: 'Per day', rate: 1200);
+    expect(store.activeRentals.any((r) => r.id == rental.id), isTrue);
+    await store.closeRental(rental.id);
+    expect(store.activeRentals.any((r) => r.id == rental.id), isFalse);
+
+    final report = await store.generateReport(
+      title: 'Machines Summary',
+      format: 'PDF',
+      period: 'Monthly',
+    );
+    expect(store.reports.first.id, report.id);
+    expect(report.summary, contains('Machines'));
   });
 }

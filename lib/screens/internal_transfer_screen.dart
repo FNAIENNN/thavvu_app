@@ -1,22 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/app_models.dart';
+import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
-
-// ─── Model ────────────────────────────────────────────────────────────────────
-class TransferRecord {
-  final String id, item, fromPoint, toPoint, status, date;
-  final int quantity;
-  
-  const TransferRecord({
-    required this.id,
-    required this.item,
-    required this.fromPoint,
-    required this.toPoint,
-    required this.quantity,
-    required this.status,
-    required this.date,
-  });
-}
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 class InternalTransferScreen extends StatefulWidget {
@@ -90,15 +76,10 @@ class _NewTransferTabState extends State<NewTransferTab> {
   String? _selectedItem;
   String _receiverStatus = '';
   bool _initiated = false;
+  bool _isSubmitting = false;
+  String? _transferId;
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
-
-  final List<String> _stockPoints = [
-    'Site A — North',
-    'Site B — South',
-    'Warehouse Main',
-    'Field Store',
-  ];
 
   final List<Map<String, dynamic>> _items = [
     {'name': 'Diesel', 'icon': Icons.local_gas_station, 'unit': 'Liters'},
@@ -116,7 +97,7 @@ class _NewTransferTabState extends State<NewTransferTab> {
     super.dispose();
   }
 
-  void _handleInitiate() {
+  Future<void> _handleInitiate() async {
     if (_fromPoint == null || _toPoint == null || _selectedItem == null || _quantityController.text.isEmpty) {
       _showSnackbar('Please fill all required fields', AppTheme.danger);
       return;
@@ -125,16 +106,52 @@ class _NewTransferTabState extends State<NewTransferTab> {
       _showSnackbar('Source and destination cannot be the same', AppTheme.danger);
       return;
     }
-    if (int.tryParse(_quantityController.text) == null) {
+    final quantity = int.tryParse(_quantityController.text);
+    if (quantity == null || quantity <= 0) {
       _showSnackbar('Please enter a valid quantity', AppTheme.warning);
       return;
     }
 
-    setState(() => _initiated = true);
+    setState(() => _isSubmitting = true);
+    final record = await context.read<AppStore>().initiateTransfer(
+          fromPoint: _fromPoint!,
+          toPoint: _toPoint!,
+          item: _selectedItem!,
+          quantity: quantity,
+          notes: _notesController.text,
+        );
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+
+    if (record == null) {
+      _showSnackbar('Insufficient stock at $_fromPoint for this transfer', AppTheme.danger);
+      return;
+    }
+
+    setState(() {
+      _initiated = true;
+      _transferId = record.id;
+    });
     _showSnackbar(
-      'Transfer initiated from $_fromPoint to $_toPoint. Stock deducted from source.',
+      'Transfer ${record.id} initiated from $_fromPoint to $_toPoint. Stock deducted from source.',
       AppTheme.success,
     );
+  }
+
+  Future<void> _handleAcknowledge() async {
+    final store = context.read<AppStore>();
+    String? targetId = _transferId;
+    if (targetId == null) {
+      final pending = store.transfers.where((t) => t.status == 'pending_ack');
+      if (pending.isNotEmpty) targetId = pending.first.id;
+    }
+    if (targetId == null) {
+      _showSnackbar('No pending transfer to acknowledge', AppTheme.warning);
+      return;
+    }
+    await store.acknowledgeTransfer(targetId);
+    if (!mounted) return;
+    _showSnackbar('Transfer $targetId acknowledged and stock updated at destination', AppTheme.success);
   }
 
   void _showSnackbar(String message, Color color) {
@@ -152,6 +169,7 @@ class _NewTransferTabState extends State<NewTransferTab> {
 
   @override
   Widget build(BuildContext context) {
+    final stockPoints = context.watch<AppStore>().stockPoints;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -165,7 +183,7 @@ class _NewTransferTabState extends State<NewTransferTab> {
             step: '1',
             title: 'Source & Destination',
             color: AppTheme.danger,
-            child: _buildSourceDestination(),
+            child: _buildSourceDestination(stockPoints),
           ),
           const SizedBox(height: 16),
           _buildStepCard(
@@ -350,7 +368,8 @@ class _NewTransferTabState extends State<NewTransferTab> {
     );
   }
 
-  Widget _buildSourceDestination() {
+  Widget _buildSourceDestination(List<StockPoint> stockPoints) {
+    final names = stockPoints.map((p) => p.name).toList();
     return Column(
       children: [
         Container(
@@ -367,7 +386,7 @@ class _NewTransferTabState extends State<NewTransferTab> {
               border: InputBorder.none,
               contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             ),
-            items: _stockPoints.map((p) => DropdownMenuItem<String>(
+            items: names.map((p) => DropdownMenuItem<String>(
               value: p,
               child: Text(p, style: const TextStyle(fontSize: 13)),
             )).toList(),
@@ -401,7 +420,7 @@ class _NewTransferTabState extends State<NewTransferTab> {
               border: InputBorder.none,
               contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             ),
-            items: _stockPoints.map((p) => DropdownMenuItem<String>(
+            items: names.map((p) => DropdownMenuItem<String>(
               value: p,
               child: Text(p, style: const TextStyle(fontSize: 13)),
             )).toList(),
@@ -565,7 +584,10 @@ class _NewTransferTabState extends State<NewTransferTab> {
                 icon: Icons.check_circle_outline,
                 color: AppTheme.success,
                 isSelected: _receiverStatus == 'received',
-                onTap: () => setState(() => _receiverStatus = 'received'),
+                onTap: () async {
+                  setState(() => _receiverStatus = 'received');
+                  await _handleAcknowledge();
+                },
               ),
             ),
             const SizedBox(width: 12),
@@ -665,7 +687,7 @@ class _NewTransferTabState extends State<NewTransferTab> {
       duration: const Duration(milliseconds: 300),
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: _initiated ? null : _handleInitiate,
+        onPressed: (_initiated || _isSubmitting) ? null : _handleInitiate,
         style: ElevatedButton.styleFrom(
           backgroundColor: _initiated ? AppTheme.success : AppTheme.info,
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -674,7 +696,9 @@ class _NewTransferTabState extends State<NewTransferTab> {
           ),
           elevation: 0,
         ),
-        child: Row(
+        child: _isSubmitting
+            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+            : Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(_initiated ? Icons.check_circle : Icons.send_outlined, size: 20),
@@ -694,72 +718,40 @@ class _NewTransferTabState extends State<NewTransferTab> {
 class TransferHistoryTab extends StatelessWidget {
   const TransferHistoryTab({super.key});
 
-  static const List<TransferRecord> _history = [
-    TransferRecord(
-      id: 'TRF-0041',
-      item: 'Diesel',
-      fromPoint: 'Site A — North',
-      toPoint: 'Site B — South',
-      quantity: 50,
-      status: 'completed',
-      date: '13 May, 9:00 AM',
-    ),
-    TransferRecord(
-      id: 'TRF-0040',
-      item: 'Engine Oil',
-      fromPoint: 'Warehouse Main',
-      toPoint: 'Field Store',
-      quantity: 10,
-      status: 'pending',
-      date: '13 May, 8:30 AM',
-    ),
-    TransferRecord(
-      id: 'TRF-0039',
-      item: 'Hydraulic Fluid',
-      fromPoint: 'Site B — South',
-      toPoint: 'Site A — North',
-      quantity: 5,
-      status: 'completed',
-      date: '12 May, 4:00 PM',
-    ),
-    TransferRecord(
-      id: 'TRF-0038',
-      item: 'Bolts & Nuts',
-      fromPoint: 'Warehouse Main',
-      toPoint: 'Site A — North',
-      quantity: 100,
-      status: 'rejected',
-      date: '12 May, 11:00 AM',
-    ),
-    TransferRecord(
-      id: 'TRF-0037',
-      item: 'Grease',
-      fromPoint: 'Field Store',
-      toPoint: 'Warehouse Main',
-      quantity: 8,
-      status: 'completed',
-      date: '11 May, 2:00 PM',
-    ),
-  ];
-
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildHeader(),
-          const SizedBox(height: 16),
-          ..._history.map((record) => _buildHistoryTile(record)),
-        ],
-      ),
+    return Consumer<AppStore>(
+      builder: (context, store, _) {
+        final history = store.transfers;
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeader(history),
+              const SizedBox(height: 16),
+              if (history.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 40),
+                  child: Center(
+                    child: Text(
+                      'No transfers recorded yet',
+                      style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                    ),
+                  ),
+                )
+              else
+                ...history.map((record) => _buildHistoryTile(record)),
+            ],
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildHeader() {
-    final completedCount = _history.where((r) => r.status == 'completed').length;
-    final pendingCount = _history.where((r) => r.status == 'pending').length;
+  Widget _buildHeader(List<TransferRecord> history) {
+    final completedCount = history.where((r) => r.status == 'completed').length;
+    final pendingCount = history.where((r) => r.status == 'pending_ack').length;
 
     return Row(
       children: [
@@ -803,12 +795,12 @@ class TransferHistoryTab extends StatelessWidget {
   Widget _buildHistoryTile(TransferRecord record) {
     final Color statusColor = record.status == 'completed'
         ? AppTheme.success
-        : record.status == 'pending'
+        : record.status == 'pending_ack'
             ? AppTheme.warning
             : AppTheme.danger;
     final Color statusBg = record.status == 'completed'
         ? AppTheme.successBg
-        : record.status == 'pending'
+        : record.status == 'pending_ack'
             ? AppTheme.warningBg
             : AppTheme.dangerBg;
 
@@ -874,7 +866,7 @@ class TransferHistoryTab extends StatelessWidget {
                     Icon(
                       record.status == 'completed'
                           ? Icons.check_circle
-                          : record.status == 'pending'
+                          : record.status == 'pending_ack'
                               ? Icons.hourglass_empty
                               : Icons.cancel,
                       size: 12,
@@ -882,7 +874,7 @@ class TransferHistoryTab extends StatelessWidget {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      record.status[0].toUpperCase() + record.status.substring(1),
+                      record.status == 'pending_ack' ? 'Pending' : (record.status[0].toUpperCase() + record.status.substring(1)),
                       style: TextStyle(fontSize: 11, color: statusColor, fontWeight: FontWeight.w600),
                     ),
                   ],

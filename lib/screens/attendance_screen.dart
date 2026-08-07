@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
+import '../providers/app_store.dart';
 
 class AttendanceScreen extends StatefulWidget {
   const AttendanceScreen({super.key});
@@ -17,6 +19,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (_selectedTab != _tabController.index) {
+        setState(() => _selectedTab = _tabController.index);
+      }
+    });
   }
 
   @override
@@ -121,16 +128,20 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   Widget _buildStatsRow() {
-    return Row(
-      children: [
-        _buildStatCard('Present', '24', AppTheme.success, Icons.check_circle),
-        const SizedBox(width: 12),
-        _buildStatCard('Absent', '3', AppTheme.danger, Icons.cancel),
-        const SizedBox(width: 12),
-        _buildStatCard('Late', '5', AppTheme.warning, Icons.access_time),
-        const SizedBox(width: 12),
-        _buildStatCard('Leave', '2', AppTheme.info, Icons.beach_access),
-      ],
+    return Consumer<AppStore>(
+      builder: (context, store, _) {
+        return Row(
+          children: [
+            _buildStatCard('Present', '${store.presentTodayCount}', AppTheme.success, Icons.check_circle),
+            const SizedBox(width: 12),
+            _buildStatCard('Absent', '${store.absentTodayCount}', AppTheme.danger, Icons.cancel),
+            const SizedBox(width: 12),
+            _buildStatCard('Half Day', '${store.halfDayTodayCount}', AppTheme.warning, Icons.hourglass_top),
+            const SizedBox(width: 12),
+            _buildStatCard('Leave', '${store.leaveTodayCount}', AppTheme.info, Icons.beach_access),
+          ],
+        );
+      },
     );
   }
 
@@ -186,10 +197,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   Widget _buildTab(String title, int index) {
-    final isSelected = _tabController.index == index;
+    final isSelected = _selectedTab == index;
     return Expanded(
       child: GestureDetector(
-        onTap: () => _tabController.animateTo(index),
+        onTap: () {
+          _tabController.animateTo(index);
+          setState(() => _selectedTab = index);
+        },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 250),
           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -225,14 +239,9 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
   String _selectedStatus = 'Present';
   bool _morningMarked = false;
   bool _eveningMarked = false;
+  bool _photoCaptured = false;
+  bool _isSubmitting = false;
   String? _selectedWorkerId;
-
-  final List<Map<String, String>> _workers = [
-    {'id': 'ATT-001', 'name': 'John Doe', 'department': 'Operations'},
-    {'id': 'ATT-002', 'name': 'Jane Smith', 'department': 'Maintenance'},
-    {'id': 'ATT-003', 'name': 'Robert Johnson', 'department': 'Logistics'},
-    {'id': 'ATT-004', 'name': 'Maria Garcia', 'department': 'Quality'},
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -326,6 +335,7 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
   }
 
   Widget _buildWorkerDropdown() {
+    final workers = context.watch<AppStore>().regularWorkers;
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
@@ -339,14 +349,14 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         ),
-        items: _workers.map((worker) {
+        items: workers.map((worker) {
           return DropdownMenuItem(
-            value: worker['id'],
+            value: worker.id,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(worker['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                Text('${worker['id']} • ${worker['department']}', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                Text(worker.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                Text('${worker.id} • ${worker.department}', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
               ],
             ),
           );
@@ -406,7 +416,17 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
           ],
         ),
         const SizedBox(height: 16),
-        _buildPhotoCard('Session attendance photo', required: true),
+        _buildPhotoCard(
+          _photoCaptured ? 'Session attendance photo captured ✓' : 'Session attendance photo',
+          required: true,
+          onTap: () {
+            setState(() => _photoCaptured = !_photoCaptured);
+            _showSnackbar(
+              _photoCaptured ? 'Photo captured' : 'Photo removed',
+              _photoCaptured ? AppTheme.success : AppTheme.warning,
+            );
+          },
+        ),
       ],
     );
   }
@@ -560,60 +580,63 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
     );
   }
 
-  Widget _buildPhotoCard(String label, {bool required = false}) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppTheme.infoBg, AppTheme.surface],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+  Widget _buildPhotoCard(String label, {bool required = false, VoidCallback? onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [AppTheme.infoBg, AppTheme.surface],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppTheme.info.withOpacity(0.25)),
         ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.info.withOpacity(0.25)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: AppTheme.info.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(14),
+        child: Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: AppTheme.info.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              alignment: Alignment.center,
+              child: const Text('📷', style: TextStyle(fontSize: 24)),
             ),
-            alignment: Alignment.center,
-            child: const Text('📷', style: TextStyle(fontSize: 24)),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textPrimary,
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  required ? 'Tap to capture (Required)' : 'Tap to capture (Optional)',
-                  style: const TextStyle(fontSize: 12, color: AppTheme.info),
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  Text(
+                    required ? 'Tap to capture (Required)' : 'Tap to capture (Optional)',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.info),
+                  ),
+                ],
+              ),
             ),
-          ),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppTheme.info.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppTheme.info.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.camera_alt, size: 20, color: AppTheme.info),
             ),
-            child: const Icon(Icons.camera_alt, size: 20, color: AppTheme.info),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -675,17 +698,7 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
       duration: const Duration(milliseconds: 300),
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: () {
-          if (_selectedWorkerId == null) {
-            _showSnackbar('Please select a worker', AppTheme.danger);
-            return;
-          }
-          if (!_morningMarked && !_eveningMarked) {
-            _showSnackbar('Please mark at least one session', AppTheme.warning);
-            return;
-          }
-          _showSnackbar('Attendance marked successfully!', AppTheme.success);
-        },
+        onPressed: _isSubmitting ? null : _submitAttendance,
         style: ElevatedButton.styleFrom(
           backgroundColor: AppTheme.success,
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -694,19 +707,57 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
           ),
           elevation: 0,
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.check_circle_outline, size: 20),
-            const SizedBox(width: 10),
-            const Text(
-              'Mark Attendance',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
+        child: _isSubmitting
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.check_circle_outline, size: 20),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Mark Attendance',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
       ),
     );
+  }
+
+  Future<void> _submitAttendance() async {
+    if (_selectedWorkerId == null) {
+      _showSnackbar('Please select a worker', AppTheme.danger);
+      return;
+    }
+    if (!_morningMarked && !_eveningMarked) {
+      _showSnackbar('Please mark at least one session', AppTheme.warning);
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+    final store = context.read<AppStore>();
+    await store.markAttendance(
+      workerId: _selectedWorkerId!,
+      status: _selectedStatus,
+      morning: _morningMarked,
+      evening: _eveningMarked,
+      method: _selectedMethod,
+      photoCaptured: _photoCaptured,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _isSubmitting = false;
+      _selectedWorkerId = null;
+      _morningMarked = false;
+      _eveningMarked = false;
+      _photoCaptured = false;
+    });
+    _showSnackbar('Attendance marked successfully!', AppTheme.success);
   }
 
   void _showSnackbar(String message, Color color) {
@@ -737,12 +788,7 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
   String? _selectedWorker;
   String _selectedStatus = 'Present';
   bool _isCreating = false;
-
-  final List<Map<String, String>> _outsideWorkers = [
-    {'id': 'OW-001', 'name': 'Raju', 'wage': '500'},
-    {'id': 'OW-002', 'name': 'Lakshmi', 'wage': '450'},
-    {'id': 'OW-003', 'name': 'Suresh', 'wage': '550'},
-  ];
+  bool _isSubmitting = false;
 
   @override
   void dispose() {
@@ -899,6 +945,7 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
   }
 
   Widget _buildMarkAttendanceCard() {
+    final outsideWorkers = context.watch<AppStore>().outsideWorkers;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -956,14 +1003,14 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               ),
-              items: _outsideWorkers.map((worker) {
+              items: outsideWorkers.map((worker) {
                 return DropdownMenuItem(
-                  value: worker['id'],
+                  value: worker.id,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(worker['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                      Text('${worker['id']} • ₹${worker['wage']}/day', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                      Text(worker.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                      Text('${worker.id} • ₹${worker.wage?.toStringAsFixed(0) ?? '0'}/day', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
                     ],
                   ),
                 );
@@ -1082,13 +1129,7 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
       duration: const Duration(milliseconds: 300),
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: () {
-          if (_selectedWorker == null) {
-            _showSnackbar('Please select a worker', AppTheme.danger);
-            return;
-          }
-          _showSnackbar('Outside worker attendance marked!', AppTheme.success);
-        },
+        onPressed: _isSubmitting ? null : _submitAttendance,
         style: ElevatedButton.styleFrom(
           backgroundColor: AppTheme.success,
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1097,34 +1138,64 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
           ),
           elevation: 0,
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.person_add_alt_1, size: 20),
-            const SizedBox(width: 10),
-            const Text(
-              'Mark Outside Worker Attendance',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
+        child: _isSubmitting
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.person_add_alt_1, size: 20),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Mark Outside Worker Attendance',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
       ),
     );
   }
 
-  void _createProfile() {
+  Future<void> _submitAttendance() async {
+    if (_selectedWorker == null) {
+      _showSnackbar('Please select a worker', AppTheme.danger);
+      return;
+    }
+    setState(() => _isSubmitting = true);
+    final store = context.read<AppStore>();
+    await store.markAttendance(
+      workerId: _selectedWorker!,
+      status: _selectedStatus,
+      method: 'Manual',
+    );
+    if (!mounted) return;
+    setState(() {
+      _isSubmitting = false;
+      _selectedWorker = null;
+    });
+    _showSnackbar('Outside worker attendance marked!', AppTheme.success);
+  }
+
+  Future<void> _createProfile() async {
     if (_nameController.text.isEmpty || _wageController.text.isEmpty) {
       _showSnackbar('Please fill name and wage', AppTheme.danger);
       return;
     }
     setState(() => _isCreating = true);
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() => _isCreating = false);
-      _showSnackbar('Profile created! Awaiting HOD approval', AppTheme.success);
-      _nameController.clear();
-      _wageController.clear();
-      _notesController.clear();
-    });
+    final store = context.read<AppStore>();
+    await store.createOutsideWorker(
+      name: _nameController.text.trim(),
+      wage: double.tryParse(_wageController.text) ?? 0,
+    );
+    if (!mounted) return;
+    setState(() => _isCreating = false);
+    _showSnackbar('Profile created! Available for attendance', AppTheme.success);
+    _nameController.clear();
+    _wageController.clear();
+    _notesController.clear();
   }
 
   void _showSnackbar(String message, Color color) {

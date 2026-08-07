@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import '../models/app_models.dart';
+import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
 
@@ -21,13 +25,6 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
   final TextEditingController _notesController = TextEditingController();
   final TextEditingController _rentalIdController = TextEditingController();
 
-  // Mock data for active rentals
-  final List<Map<String, dynamic>> _activeRentals = [
-    {'id': 'RNT-2024-0034', 'item': 'Excavator', 'startDate': '2024-05-01', 'rate': 5000, 'fuel': 1200},
-    {'id': 'RNT-2024-0035', 'item': 'Compressor', 'startDate': '2024-05-05', 'rate': 3000, 'fuel': 800},
-    {'id': 'RNT-2024-0036', 'item': 'Generator', 'startDate': '2024-05-10', 'rate': 4000, 'fuel': 1500},
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -45,7 +42,7 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
     super.dispose();
   }
 
-  void _openRental() {
+  Future<void> _openRental() async {
     if (_itemController.text.isEmpty) {
       _showSnackbar('Please enter item name', AppTheme.danger);
       return;
@@ -56,25 +53,41 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
     }
 
     setState(() => _isOpening = true);
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() => _isOpening = false);
-      _showSnackbar('Rental record opened for ${_itemController.text}', AppTheme.success);
-      _clearOpenForm();
-    });
+    final record = await context.read<AppStore>().openRental(
+          item: _itemController.text,
+          billingMode: _billingMode,
+          rate: double.tryParse(_rateController.text) ?? 0,
+          fuel: double.tryParse(_fuelController.text) ?? 0,
+          notes: _notesController.text,
+        );
+    if (!mounted) return;
+    setState(() => _isOpening = false);
+    _showSnackbar('Rental record ${record.id} opened for ${record.item}', AppTheme.success);
+    _clearOpenForm();
   }
 
-  void _closeRental() {
+  Future<void> _closeRental() async {
     if (_rentalIdController.text.isEmpty) {
       _showSnackbar('Please enter Rental ID', AppTheme.danger);
       return;
     }
 
     setState(() => _isClosing = true);
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() => _isClosing = false);
-      _showSnackbar('Rental record closed successfully', AppTheme.success);
-      _rentalIdController.clear();
-    });
+    final closed = await context.read<AppStore>().closeRental(_rentalIdController.text.trim());
+    if (!mounted) return;
+    setState(() => _isClosing = false);
+    if (closed == null) {
+      _showSnackbar('Rental ID not found', AppTheme.danger);
+      return;
+    }
+    _showSnackbar('Rental ${closed.id} closed successfully', AppTheme.success);
+    _rentalIdController.clear();
+  }
+
+  Future<void> _copyRentalId(String id) async {
+    await Clipboard.setData(ClipboardData(text: id));
+    if (!mounted) return;
+    _showSnackbar('Rental ID $id copied to clipboard', AppTheme.info);
   }
 
   void _clearOpenForm() {
@@ -118,6 +131,7 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
     return Scaffold(
       backgroundColor: AppTheme.surface,
       appBar: AppBar(
@@ -141,14 +155,15 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
       body: TabBarView(
         controller: _tabController,
         children: [
-          _buildOpenRentalTab(),
-          _buildCloseRentalTab(),
+          _buildOpenRentalTab(store),
+          _buildCloseRentalTab(store),
         ],
       ),
     );
   }
 
-  Widget _buildOpenRentalTab() {
+  Widget _buildOpenRentalTab(AppStore store) {
+    final nextId = 'RNT-${DateTime.now().year}-${(34 + store.rentals.length).toString().padLeft(4, '0')}';
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -156,7 +171,7 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
         children: [
           _buildHeader(),
           const SizedBox(height: 16),
-          _buildAutoIdCard(),
+          _buildAutoIdCard(nextId),
           const SizedBox(height: 16),
           _buildRentalCard(
             step: 1,
@@ -188,7 +203,7 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
     );
   }
 
-  Widget _buildCloseRentalTab() {
+  Widget _buildCloseRentalTab(AppStore store) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -196,7 +211,7 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
         children: [
           _buildHeader(),
           const SizedBox(height: 16),
-          _buildActiveRentalsList(),
+          _buildActiveRentalsList(store.activeRentals),
           const SizedBox(height: 16),
           _buildRentalCard(
             step: 1,
@@ -209,6 +224,10 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
           const SizedBox(height: 20),
           _buildSubmitButton('Close Rental Record', AppTheme.success, _closeRental, _isClosing, Icons.check),
           const SizedBox(height: 16),
+          if (store.closedRentals.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _buildClosedRentalsSummary(store.closedRentals),
+          ],
         ],
       ),
     );
@@ -247,7 +266,7 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
     );
   }
 
-  Widget _buildAutoIdCard() {
+  Widget _buildAutoIdCard(String previewId) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -277,19 +296,22 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Auto-generated Rental ID', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.danger)),
-                const Text('RNT-2024-0034', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.danger)),
+                Text(previewId, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.danger)),
                 const SizedBox(height: 4),
                 const HodApprovalBadge(),
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
+          GestureDetector(
+            onTap: () => _copyRentalId(previewId),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.copy, size: 16, color: AppTheme.danger),
             ),
-            child: const Icon(Icons.copy, size: 16, color: AppTheme.danger),
           ),
         ],
       ),
@@ -521,7 +543,7 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
     );
   }
 
-  Widget _buildActiveRentalsList() {
+  Widget _buildActiveRentalsList(List<RentalRecord> activeRentals) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -532,30 +554,39 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Active Rentals',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+          Text(
+            'Active Rentals (${activeRentals.length})',
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
           ),
           const SizedBox(height: 12),
-          ..._activeRentals.map((rental) => _buildActiveRentalTile(rental)),
+          if (activeRentals.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                'No active rentals right now',
+                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+              ),
+            )
+          else
+            ...activeRentals.map((rental) => _buildActiveRentalTile(rental)),
         ],
       ),
     );
   }
 
-  Widget _buildActiveRentalTile(Map<String, dynamic> rental) {
+  Widget _buildActiveRentalTile(RentalRecord rental) {
     return GestureDetector(
-      onTap: () => _rentalIdController.text = rental['id'],
+      onTap: () => setState(() => _rentalIdController.text = rental.id),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: _rentalIdController.text == rental['id'] 
+          color: _rentalIdController.text == rental.id
               ? AppTheme.successBg 
               : AppTheme.surface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: _rentalIdController.text == rental['id'] 
+            color: _rentalIdController.text == rental.id
                 ? AppTheme.success 
                 : AppTheme.border,
           ),
@@ -570,27 +601,76 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
                 borderRadius: BorderRadius.circular(10),
               ),
               alignment: Alignment.center,
-              child: Text(rental['item'][0], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              child: Text(rental.item.isNotEmpty ? rental.item[0] : '?', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(rental['item'], style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  Text('${rental['id']} • Started ${rental['startDate']}', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                  Text(rental.item, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text('${rental.id} • Started ${rental.startDate}', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
                 ],
               ),
             ),
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text('₹${rental['rate']}/day', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                Text('Fuel: ₹${rental['fuel']}', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                Text('₹${rental.rate.toStringAsFixed(0)}/day', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                Text('Fuel: ₹${rental.fuel.toStringAsFixed(0)}', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
               ],
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 16, color: AppTheme.textMuted),
+              onPressed: () => _copyRentalId(rental.id),
+              tooltip: 'Copy rental ID',
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildClosedRentalsSummary(List<RentalRecord> closedRentals) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Closed Rentals',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppTheme.successBg,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${closedRentals.length} closed',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.success),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...closedRentals.take(3).map((r) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  '${r.id} · ${r.item} · closed ${r.endDate ?? ''}',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                ),
+              )),
+        ],
       ),
     );
   }
