@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/app_models.dart';
+import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
-import '../widgets/shared_widgets.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -34,14 +36,6 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     {'emoji': '🏍️', 'title': 'Site bikes petrol', 'desc': 'Bike ID · Petrol consumption', 'color': AppTheme.success, 'icon': Icons.two_wheeler},
   ];
 
-  // Demo data for recent reports
-  final List<Map<String, dynamic>> _recentReports = [
-    {'id': 'RPT-001', 'title': 'Machines Summary', 'date': DateTime(2024, 5, 13), 'size': '2.4 MB', 'type': 'PDF', 'status': 'completed'},
-    {'id': 'RPT-002', 'title': 'Workers Report', 'date': DateTime(2024, 5, 12), 'size': '1.8 MB', 'type': 'PDF', 'status': 'completed'},
-    {'id': 'RPT-003', 'title': 'Diesel Consumption', 'date': DateTime(2024, 5, 11), 'size': '1.2 MB', 'type': 'Excel', 'status': 'completed'},
-    {'id': 'RPT-004', 'title': 'Rental Summary', 'date': DateTime(2024, 5, 10), 'size': '892 KB', 'type': 'PDF', 'status': 'pending'},
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -69,8 +63,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   // Helper methods
-  int get _completedReportsCount => _recentReports.where((r) => r['status'] == 'completed').length;
-  int get _pendingReportsCount => _recentReports.where((r) => r['status'] == 'pending').length;
+  int _completedReportsCount(List<ReportRecord> reports) => reports.where((r) => r.status == 'completed').length;
+  int _pendingReportsCount(List<ReportRecord> reports) => reports.where((r) => r.status == 'pending').length;
 
   String _formatDate(DateTime? date) {
     if (date == null) return 'Select date';
@@ -107,45 +101,63 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
   }
 
-  void _generateReport() {
+  Future<void> _generateReport() async {
     if (_selectedReport.isEmpty) {
       _showSnackbar('Please select a report type', AppTheme.warning);
       return;
     }
 
     setState(() => _isGenerating = true);
-    
-    // Simulate API call with realistic delay
-    Future.delayed(const Duration(seconds: 2), () {
-      setState(() => _isGenerating = false);
-      
-      // Add to recent reports (simulated)
-      final newReport = {
-        'id': 'RPT-${DateTime.now().millisecondsSinceEpoch}',
-        'title': _selectedReport,
-        'date': DateTime.now(),
-        'size': '${(150 + DateTime.now().millisecond % 500)} KB',
-        'type': _selectedFormat,
-        'status': 'completed',
-      };
-      
-      _showSnackbar(
-        '$_selectedReport report generated successfully!',
-        AppTheme.success,
-        action: SnackBarAction(
-          label: 'VIEW',
-          onPressed: () => _viewReport(newReport),
+
+    final store = context.read<AppStore>();
+    final report = await store.generateReport(
+      title: _selectedReport,
+      format: _selectedFormat,
+      period: _selectedPeriod,
+    );
+
+    if (!mounted) return;
+    setState(() => _isGenerating = false);
+
+    _showSnackbar(
+      '$_selectedReport report generated successfully!',
+      AppTheme.success,
+      action: SnackBarAction(
+        label: 'VIEW',
+        onPressed: () => _viewReport(report),
+      ),
+    );
+  }
+
+  void _viewReport(ReportRecord report) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(report.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_formatDate(report.date), style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+            const SizedBox(height: 12),
+            Text(report.summary, style: const TextStyle(fontSize: 13, height: 1.4)),
+            const SizedBox(height: 12),
+            Text('${report.type} · ${report.size}', style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+          ],
         ),
-      );
-    });
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
-  void _viewReport(Map<String, dynamic> report) {
-    _showSnackbar('Opening ${report['title']}...', AppTheme.info);
-  }
-
-  void _downloadReport(Map<String, dynamic> report) {
-    _showSnackbar('Downloading ${report['title']}...', AppTheme.success);
+  void _downloadReport(ReportRecord report) {
+    _showSnackbar('Downloading ${report.title}...', AppTheme.success);
   }
 
   void _shareReport() {
@@ -189,6 +201,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
   @override
   Widget build(BuildContext context) {
+    final reports = context.watch<AppStore>().reports;
     return Scaffold(
       backgroundColor: AppTheme.surface,
       appBar: AppBar(
@@ -230,7 +243,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             children: [
               _buildHeader(),
               const SizedBox(height: 20),
-              _buildStatsOverview(),
+              _buildStatsOverview(reports),
               const SizedBox(height: 20),
               _buildStepSection(
                 number: '01',
@@ -255,7 +268,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               const SizedBox(height: 24),
               _buildGenerateButton(),
               const SizedBox(height: 24),
-              _buildRecentReports(),
+              _buildRecentReports(reports),
               const SizedBox(height: 16),
               _buildInfoNote(),
               const SizedBox(height: 16),
@@ -305,7 +318,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildStatsOverview() {
+  Widget _buildStatsOverview(List<ReportRecord> reports) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -319,11 +332,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       ),
       child: Row(
         children: [
-          _buildStatOverviewItem('Reports', '${_recentReports.length}', Icons.description, Colors.white),
+          _buildStatOverviewItem('Reports', '${reports.length}', Icons.description, Colors.white),
           Container(width: 1, height: 40, color: Colors.white24),
-          _buildStatOverviewItem('Generated', '$_completedReportsCount', Icons.check_circle, Colors.white),
+          _buildStatOverviewItem('Generated', '${_completedReportsCount(reports)}', Icons.check_circle, Colors.white),
           Container(width: 1, height: 40, color: Colors.white24),
-          _buildStatOverviewItem('Pending', '$_pendingReportsCount', Icons.pending, Colors.white),
+          _buildStatOverviewItem('Pending', '${_pendingReportsCount(reports)}', Icons.pending, Colors.white),
         ],
       ),
     );
@@ -776,8 +789,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildRecentReports() {
-    if (_recentReports.isEmpty) return const SizedBox();
+  Widget _buildRecentReports(List<ReportRecord> reports) {
+    if (reports.isEmpty) return const SizedBox();
     
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -793,14 +806,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           ],
         ),
         const SizedBox(height: 12),
-        ..._recentReports.take(3).map((report) => _buildRecentReportTile(report)),
+        ...reports.take(3).map((report) => _buildRecentReportTile(report)),
       ],
     );
   }
 
-  Widget _buildRecentReportTile(Map<String, dynamic> report) {
-    final isPending = report['status'] == 'pending';
-    final isPDF = report['type'] == 'PDF';
+  Widget _buildRecentReportTile(ReportRecord report) {
+    final isPending = report.status == 'pending';
+    final isPDF = report.type == 'PDF';
     
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -834,7 +847,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               children: [
                 Row(
                   children: [
-                    Text(report['title'], style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text(report.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                     if (isPending) ...[
                       const SizedBox(width: 8),
                       Container(
@@ -850,7 +863,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${_formatDate(report['date'])} • ${report['size']}',
+                  '${_formatDate(report.date)} • ${report.size}',
                   style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
                 ),
               ],

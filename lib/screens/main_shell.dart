@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_store.dart';
+import '../models/app_models.dart';
 import 'overview_screen.dart';
 import 'machines_entry_screen.dart';
 import 'daily_data_screen.dart';
@@ -11,6 +14,8 @@ import 'tasks_screen.dart';
 import 'reports_screen.dart';
 import 'maps_screen.dart';
 import 'hod_tasks_screen.dart';
+import 'settings_screen.dart';
+import 'help_screen.dart';
 import 'login_screen.dart';
 
 class MainShell extends StatefulWidget {
@@ -27,9 +32,7 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
   late AnimationController _drawerAnimController;
   late Animation<double> _drawerFade;
 
-  int _notificationCount = 3;
-
-  final Map<String, dynamic> _supervisorData = {
+  final Map<String, dynamic> _fallbackSupervisorData = {
     'name': 'Rajesh Kumar',
     'empId': 'EMP-001',
     'role': 'Senior Supervisor',
@@ -37,11 +40,30 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
     'phone': '+91 98765 43210',
     'email': 'rajesh@thavvu.com',
     'joinDate': '12 Jan 2022',
-    'tasksCompleted': 142,
-    'reportsGenerated': 38,
     'attendancePct': '94%',
     'avatar': '👷',
   };
+
+  Map<String, dynamic> _profileData(AppStore store) {
+    final user = store.currentUser;
+    return {
+      'name': user?.name ?? _fallbackSupervisorData['name'],
+      'empId': user?.empId ?? _fallbackSupervisorData['empId'],
+      'role': user?.role ?? _fallbackSupervisorData['role'],
+      'site': user?.site ?? _fallbackSupervisorData['site'],
+      'phone': user?.phone ?? _fallbackSupervisorData['phone'],
+      'email': user?.email ?? _fallbackSupervisorData['email'],
+      'joinDate': user?.joinDate ?? _fallbackSupervisorData['joinDate'],
+      'tasksCompleted': store.completedTaskCount,
+      'reportsGenerated': store.reports.length,
+      'attendancePct': _fallbackSupervisorData['attendancePct'],
+      'avatar': _fallbackSupervisorData['avatar'],
+    };
+  }
+
+  // Populated at the top of build() from the live AppStore so existing
+  // helper methods below can keep referencing `_supervisorData` directly.
+  late Map<String, dynamic> _supervisorData = _fallbackSupervisorData;
 
   @override
   void initState() {
@@ -179,6 +201,12 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
       case '/hodtasks':
         screen = const HODTasksScreen();
         break;
+      case '/settings':
+        screen = const SettingsScreen();
+        break;
+      case '/help':
+        screen = const HelpScreen();
+        break;
       default:
         screen = OverviewScreen(
           onNavigate: (i) => setState(() => _currentIndex = i),
@@ -190,19 +218,43 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    _supervisorData = _profileData(store);
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF4F6FC),
       drawer: _buildSideDrawer(),
-      appBar: _buildAppBar(),
+      appBar: _buildAppBar(store),
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 220),
         child: KeyedSubtree(key: ValueKey(_currentIndex), child: _buildCurrentScreen()),
       ),
+      bottomNavigationBar: _buildBottomNavBar(),
     );
   }
 
-  PreferredSizeWidget _buildAppBar() {
+  Widget _buildBottomNavBar() {
+    return BottomNavigationBar(
+      currentIndex: _currentIndex,
+      onTap: (i) => setState(() => _currentIndex = i),
+      type: BottomNavigationBarType.fixed,
+      backgroundColor: Colors.white,
+      selectedItemColor: const Color(0xFF1565C0),
+      unselectedItemColor: Colors.grey,
+      selectedFontSize: 11,
+      unselectedFontSize: 11,
+      items: const [
+        BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: 'Home'),
+        BottomNavigationBarItem(icon: Icon(Icons.construction_rounded), label: 'Machine'),
+        BottomNavigationBarItem(icon: Icon(Icons.edit_calendar_rounded), label: 'Daily'),
+        BottomNavigationBarItem(icon: Icon(Icons.fingerprint_rounded), label: 'Attendance'),
+        BottomNavigationBarItem(icon: Icon(Icons.grid_view_rounded), label: 'More'),
+      ],
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar(AppStore store) {
+    final notificationCount = store.unreadNotificationCount;
     return AppBar(
       backgroundColor: const Color(0xFF0F3460),
       elevation: 0,
@@ -266,7 +318,7 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
               onPressed: () => _showNotificationsPanel(context),
               tooltip: 'Notifications',
             ),
-            if (_notificationCount > 0)
+            if (notificationCount > 0)
               Positioned(
                 right: 8,
                 top: 8,
@@ -279,7 +331,7 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
                     border: Border.all(color: const Color(0xFF0F3460), width: 1.5),
                   ),
                   alignment: Alignment.center,
-                  child: Text('$_notificationCount', style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
+                  child: Text('$notificationCount', style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
                 ),
               ),
           ],
@@ -551,34 +603,108 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        height: MediaQuery.of(context).size.height * 0.65,
-        decoration: const BoxDecoration(
-          color: Color(0xFFF4F6FC),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          children: [
-            Container(
-              margin: const EdgeInsets.only(top: 10),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2),
-              ),
+      builder: (_) => Consumer<AppStore>(
+        builder: (context, store, _) {
+          final notifications = store.notifications;
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.65,
+            decoration: const BoxDecoration(
+              color: Color(0xFFF4F6FC),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
             ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('Notifications', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF0A1628))),
-                ],
-              ),
+            child: Column(
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(top: 10),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Notifications', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF0A1628))),
+                      if (notifications.any((n) => !n.read))
+                        TextButton(
+                          onPressed: () => store.markAllNotificationsRead(),
+                          child: const Text('Mark all read'),
+                        ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: notifications.isEmpty
+                      ? const Center(child: Text('No new notifications'))
+                      : ListView.builder(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          itemCount: notifications.length,
+                          itemBuilder: (context, index) {
+                            final n = notifications[index];
+                            return _buildNotificationTile(n, store);
+                          },
+                        ),
+                ),
+              ],
             ),
-            const Expanded(child: Center(child: Text('No new notifications'))),
-          ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildNotificationTile(AppNotification n, AppStore store) {
+    final Color color = switch (n.type) {
+      'success' => const Color(0xFF0FA37A),
+      'warning' => const Color(0xFFE6A817),
+      'danger' => const Color(0xFFE53935),
+      _ => const Color(0xFF1976D2),
+    };
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: n.read ? Colors.white : color.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => store.markNotificationRead(n.id),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 10,
+                  height: 10,
+                  margin: const EdgeInsets.only(top: 4),
+                  decoration: BoxDecoration(
+                    color: n.read ? Colors.transparent : color,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: color),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(n.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0A1628))),
+                      const SizedBox(height: 4),
+                      Text(n.body, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -770,12 +896,15 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
             child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
-                (_) => false,
-              );
+              await context.read<AppStore>().logout();
+              if (context.mounted) {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  (_) => false,
+                );
+              }
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFE53935),

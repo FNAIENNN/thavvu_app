@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
 
@@ -21,10 +23,6 @@ class _OverviewScreenState extends State<OverviewScreen>
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
-  final int _totalTasks = 14;
-  final int _completedTasks = 6;
-  final int _pendingAmount = 24500;
-  final String _userName = 'Rajesh';
   String _greeting = 'Good morning';
 
   @override
@@ -63,6 +61,7 @@ class _OverviewScreenState extends State<OverviewScreen>
 
   @override
   Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
     return FadeTransition(
       opacity: _fadeAnimation,
       child: CustomScrollView(
@@ -71,9 +70,9 @@ class _OverviewScreenState extends State<OverviewScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildHeroHeader(),
+                _buildHeroHeader(store),
                 const SizedBox(height: 16),
-                _buildStatsSection(),
+                _buildStatsSection(store),
                 const SizedBox(height: 16),
                 _buildQuickActions(),
                 const SizedBox(height: 16),
@@ -91,7 +90,8 @@ class _OverviewScreenState extends State<OverviewScreen>
     );
   }
 
-  Widget _buildHeroHeader() {
+  Widget _buildHeroHeader(AppStore store) {
+    final userName = store.currentUser?.name.split(' ').first ?? 'Rajesh';
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -168,7 +168,7 @@ class _OverviewScreenState extends State<OverviewScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '$_greeting, $_userName!',
+                              '$_greeting, $userName!',
                               style: const TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w800,
@@ -266,16 +266,19 @@ class _OverviewScreenState extends State<OverviewScreen>
     );
   }
 
-  Widget _buildStatsSection() {
+  Widget _buildStatsSection(AppStore store) {
+    final pendingTasks = store.pendingTaskCount;
+    final completedTasks = store.completedTaskCount;
+    final pendingAmount = store.pendingAmount.toStringAsFixed(0);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
           _buildStatCard('Modules', '10', AppTheme.info, Icons.dashboard_rounded, 'Available'),
           const SizedBox(width: 10),
-          _buildStatCard('Tasks', '$_totalTasks', AppTheme.success, Icons.task_alt_rounded, '$_completedTasks done'),
+          _buildStatCard('Tasks', '$pendingTasks', AppTheme.success, Icons.task_alt_rounded, '$completedTasks done'),
           const SizedBox(width: 10),
-          _buildStatCard('Pending', '₹$_pendingAmount', AppTheme.warning, Icons.currency_rupee_rounded, 'To collect'),
+          _buildStatCard('Pending', '₹$pendingAmount', AppTheme.warning, Icons.currency_rupee_rounded, 'To collect'),
         ],
       ),
     );
