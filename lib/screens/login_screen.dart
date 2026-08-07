@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_store.dart';
 import 'main_shell.dart';
+import 'hod_shell.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -65,7 +66,9 @@ class _LoginScreenState extends State<LoginScreen>
       final store = context.read<AppStore>();
       if (store.currentUser != null && mounted) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const MainShell()),
+          MaterialPageRoute(
+            builder: (_) => store.isHod ? const HodShell() : const MainShell(),
+          ),
         );
       }
     });
@@ -106,9 +109,10 @@ class _LoginScreenState extends State<LoginScreen>
       _showSnackbar(error, const Color(0xFFE53935));
       return;
     }
+    final isHod = store.isHod;
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const MainShell(),
+        pageBuilder: (_, __, ___) => isHod ? const HodShell() : const MainShell(),
         transitionsBuilder: (_, animation, __, child) => FadeTransition(
           opacity: animation,
           child: child,
@@ -452,24 +456,68 @@ class _LoginScreenState extends State<LoginScreen>
           ),
         ),
         const SizedBox(height: 10),
-        Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1976D2).withOpacity(0.08),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Text(
-              'Demo login: rajesh@thavvu.com / password',
-              style: TextStyle(
-                fontSize: 10,
-                color: Color(0xFF1976D2),
-                fontWeight: FontWeight.w500,
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1976D2).withOpacity(0.06),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF1976D2).withOpacity(0.15)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.badge_outlined, size: 14, color: Color(0xFF1976D2)),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Demo Logins',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF1976D2)),
+                  ),
+                ],
               ),
-            ),
+              const SizedBox(height: 6),
+              _buildDemoCredentialRow('HOD', 'hod@thavvu.com', const Color(0xFF0FA37A)),
+              const SizedBox(height: 3),
+              _buildDemoCredentialRow('Supervisor', 'supervisor@thavvu.com', const Color(0xFF1976D2)),
+              const SizedBox(height: 4),
+              const Text(
+                'Password: password',
+                style: TextStyle(fontSize: 10, color: Color(0xFF7A8699), fontStyle: FontStyle.italic),
+              ),
+            ],
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDemoCredentialRow(String role, String email, Color color) {
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _emailController.text = email;
+          _passwordController.text = 'password';
+        });
+      },
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(role, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: color)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(email, style: const TextStyle(fontSize: 11, color: Color(0xFF555555))),
+          ),
+          const Icon(Icons.touch_app_outlined, size: 12, color: Color(0xFFAAAAAA)),
+        ],
+      ),
     );
   }
 

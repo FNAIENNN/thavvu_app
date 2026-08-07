@@ -44,7 +44,7 @@ void main() {
     testWidgets('shows seeded stock points and raises an order via the store', (tester) async {
       await _useBigSurface(tester);
       final store = AppStore();
-      await store.init();
+      await tester.runAsync(() => store.init());
 
       await tester.pumpWidget(_wrap(store, const StockInventoryScreen()));
       await tester.pumpAndSettle();
@@ -80,7 +80,7 @@ void main() {
     testWidgets('submits a stock return via the store', (tester) async {
       await _useBigSurface(tester);
       final store = AppStore();
-      await store.init();
+      await tester.runAsync(() => store.init());
 
       await tester.pumpWidget(_wrap(store, const StockInventoryScreen()));
       await tester.pumpAndSettle();
@@ -109,7 +109,7 @@ void main() {
     testWidgets('initiates a transfer via the store and shows insufficient stock error', (tester) async {
       await _useBigSurface(tester);
       final store = AppStore();
-      await store.init();
+      await tester.runAsync(() => store.init());
 
       await tester.pumpWidget(_wrap(store, const InternalTransferScreen()));
       await tester.pumpAndSettle();
@@ -133,7 +133,7 @@ void main() {
     testWidgets('successful transfer deducts stock and appears in history', (tester) async {
       await _useBigSurface(tester);
       final store = AppStore();
-      await store.init();
+      await tester.runAsync(() => store.init());
 
       await tester.pumpWidget(_wrap(store, const InternalTransferScreen()));
       await tester.pumpAndSettle();
@@ -173,7 +173,7 @@ void main() {
     testWidgets('opens a rental via the store and shows the generated id', (tester) async {
       await _useBigSurface(tester);
       final store = AppStore();
-      await store.init();
+      await tester.runAsync(() => store.init());
 
       await tester.pumpWidget(_wrap(store, const RentalScreen()));
       await tester.pumpAndSettle();
@@ -196,7 +196,7 @@ void main() {
     testWidgets('closes an active rental and reports not-found for unknown id', (tester) async {
       await _useBigSurface(tester);
       final store = AppStore();
-      await store.init();
+      await tester.runAsync(() => store.init());
       final activeId = store.activeRentals.first.id;
 
       await tester.pumpWidget(_wrap(store, const RentalScreen()));

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../models/app_models.dart';
 import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
+import '../widgets/activity_feed_view.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -244,7 +245,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               _buildHeader(),
               const SizedBox(height: 20),
               _buildStatsOverview(reports),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
+              _buildStepSection(
+                number: '00',
+                title: 'Live Activity Feed',
+                subtitle: 'Stock, transfers, daily logs, attendance & supplier events straight from the backend',
+                child: _buildLiveActivityCard(),
+              ),
+              const SizedBox(height: 24),
               _buildStepSection(
                 number: '01',
                 title: 'Select Report Type',
@@ -391,6 +399,42 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         const SizedBox(height: 16),
         child,
       ],
+    );
+  }
+
+  Widget _buildLiveActivityCard() {
+    final remoteEnabled = context.watch<AppStore>().remoteEnabled;
+    if (!remoteEnabled) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppTheme.surfaceCard,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppTheme.border, width: 0.8),
+        ),
+        child: const Row(
+          children: [
+            Icon(Icons.cloud_off_outlined, color: AppTheme.textMuted, size: 20),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Connect to the live backend to see the activity feed. Demo/offline mode shows locally generated reports only.',
+                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.border, width: 0.8),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: const ActivityFeedView(),
     );
   }
 

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../models/app_models.dart';
 import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
+import '../widgets/photo_capture_card.dart';
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 class InternalTransferScreen extends StatefulWidget {
@@ -78,6 +79,8 @@ class _NewTransferTabState extends State<NewTransferTab> {
   bool _initiated = false;
   bool _isSubmitting = false;
   String? _transferId;
+  String? _photoPath;
+  bool _capturingPhoto = false;
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
 
@@ -119,6 +122,7 @@ class _NewTransferTabState extends State<NewTransferTab> {
           item: _selectedItem!,
           quantity: quantity,
           notes: _notesController.text,
+          photoPath: _photoPath,
         );
     if (!mounted) return;
     setState(() => _isSubmitting = false);
@@ -490,6 +494,20 @@ class _NewTransferTabState extends State<NewTransferTab> {
     );
   }
 
+  Future<void> _capturePhoto() async {
+    setState(() => _capturingPhoto = true);
+    final store = context.read<AppStore>();
+    final path = await store.capturePhoto(module: 'transfers', label: 'transfer_photo');
+    if (!mounted) return;
+    setState(() {
+      _capturingPhoto = false;
+      if (path != null) _photoPath = path;
+    });
+    if (path != null) {
+      _showSnackbar('Transfer photo captured', AppTheme.success);
+    }
+  }
+
   Widget _buildNotesAndInitiate() {
     return Column(
       children: [
@@ -503,6 +521,14 @@ class _NewTransferTabState extends State<NewTransferTab> {
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           ),
+        ),
+        const SizedBox(height: 14),
+        PhotoCaptureCard(
+          label: 'Transfer photo (optional)',
+          hint: 'Tap to capture',
+          imagePath: _photoPath,
+          onTap: _capturingPhoto ? null : _capturePhoto,
+          onClear: _photoPath == null ? null : () => setState(() => _photoPath = null),
         ),
         const SizedBox(height: 14),
         Container(

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_store.dart';
 import '../models/app_models.dart';
+import '../theme/app_theme.dart';
 import 'overview_screen.dart';
 import 'machines_entry_screen.dart';
 import 'daily_data_screen.dart';
@@ -17,6 +18,7 @@ import 'hod_tasks_screen.dart';
 import 'settings_screen.dart';
 import 'help_screen.dart';
 import 'login_screen.dart';
+import 'supplier_screen.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -120,6 +122,7 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
       {'title': 'Rental', 'route': '/rental', 'emoji': '🔑', 'color': const Color(0xFFE53935)},
       {'title': 'Tasks & Checklist', 'route': '/tasks', 'emoji': '✅', 'color': const Color(0xFF0FA37A)},
       {'title': 'Reports', 'route': '/reports', 'emoji': '📊', 'color': const Color(0xFF9C27B0)},
+      {'title': 'Suppliers', 'route': '/suppliers', 'emoji': '🏬', 'color': const Color(0xFFE53935)},
       {'title': 'Maps & Specs', 'route': '/maps', 'emoji': '🗺️', 'color': const Color(0xFF1976D2)},
       {'title': 'HOD Tasks', 'route': '/hodtasks', 'emoji': '📋', 'color': const Color(0xFF0FA37A)},
     ];
@@ -194,6 +197,9 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
         break;
       case '/reports':
         screen = const ReportsScreen();
+        break;
+      case '/suppliers':
+        screen = const SupplierScreen();
         break;
       case '/maps':
         screen = const MapsScreen();
@@ -401,6 +407,7 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
                     _buildDrawerModuleTile(Icons.key_outlined, 'Rental', '/rental', const Color(0xFFE53935)),
                     _buildDrawerModuleTile(Icons.task_alt_outlined, 'Tasks & Checklist', '/tasks', const Color(0xFF0FA37A)),
                     _buildDrawerModuleTile(Icons.bar_chart_rounded, 'Reports', '/reports', const Color(0xFF9C27B0)),
+                    _buildDrawerModuleTile(Icons.storefront_outlined, 'Suppliers', '/suppliers', const Color(0xFFE53935)),
                     const SizedBox(height: 8),
                     _buildDrawerSection('Settings'),
                     _buildDrawerModuleTile(Icons.settings_outlined, 'App Settings', '/settings', Colors.grey),
@@ -409,6 +416,110 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
                 ),
               ),
               _buildDrawerFooter(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSiteSwitcherRow(AppStore store) {
+    if (!store.remoteEnabled || store.currentProfile == null) return const SizedBox.shrink();
+    String? siteName;
+    for (final s in store.remoteSites) {
+      if (s.id == store.activeSiteId) {
+        siteName = s.name;
+        break;
+      }
+    }
+    String? pointName;
+    for (final p in store.remoteThavvuPoints) {
+      if (p.id == store.activeThavvuPointId) {
+        pointName = p.name;
+        break;
+      }
+    }
+    final label = [siteName, pointName].where((e) => e != null && e.isNotEmpty).join(' · ');
+    if (label.isEmpty) return const SizedBox.shrink();
+
+    final canSwitch = store.remoteSites.length > 1 || store.remoteThavvuPoints.length > 1;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: GestureDetector(
+        onTap: canSwitch ? () => _showSiteSwitcher(context, store) : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(color: Colors.white.withOpacity(0.12), borderRadius: BorderRadius.circular(8)),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.apartment_outlined, size: 11, color: Colors.white70),
+              const SizedBox(width: 4),
+              Flexible(child: Text(label, style: const TextStyle(fontSize: 11, color: Colors.white70), overflow: TextOverflow.ellipsis)),
+              if (canSwitch) ...[
+                const SizedBox(width: 4),
+                const Icon(Icons.unfold_more, size: 12, color: Colors.white54),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showSiteSwitcher(BuildContext context, AppStore store) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => Consumer<AppStore>(
+        builder: (context, store, _) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Switch Site / Thavvu Point', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 16),
+              if (store.remoteSites.length > 1) ...[
+                const Text('Site', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: store.activeSiteId,
+                  isExpanded: true,
+                  decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                  items: store.remoteSites
+                      .map((s) => DropdownMenuItem(value: s.id, child: Text(s.name, style: const TextStyle(fontSize: 13))))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) store.setActiveSite(v);
+                  },
+                ),
+                const SizedBox(height: 16),
+              ],
+              if (store.remoteThavvuPoints.length > 1) ...[
+                const Text('Thavvu Point', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: store.activeThavvuPointId,
+                  isExpanded: true,
+                  decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                  items: store.remoteThavvuPoints
+                      .map((p) => DropdownMenuItem(value: p.id, child: Text(p.name, style: const TextStyle(fontSize: 13))))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) store.setActiveThavvuPoint(v);
+                  },
+                ),
+              ],
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Done'),
+                ),
+              ),
             ],
           ),
         ),
@@ -494,6 +605,7 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
               ],
             ),
           ),
+          _buildSiteSwitcherRow(context.watch<AppStore>()),
         ],
       ),
     );

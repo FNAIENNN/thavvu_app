@@ -31,7 +31,8 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
   String? _selectedDieselInclusion;
   bool _isSubmitting = false;
   PaymentMode _paymentMode = PaymentMode.cash;
-  bool _photoCaptured = false;
+  String? _photoPath;
+  bool _capturingPhoto = false;
 
   final List<String> _vehicleTypes = ['Poclain', 'Tractor', 'Dozer', 'Excavator', 'Loader'];
   final List<String> _billingTypes = ['Hourly', 'Daily', 'Weekly'];
@@ -95,6 +96,7 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
       supplierName: _supplierNameController.text.trim(),
       supplierAmount: double.tryParse(_supplierAmountController.text) ?? 0,
       notes: _notesController.text.trim(),
+      photoPath: _photoPath,
     );
 
     if (!mounted) return;
@@ -129,7 +131,7 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
       _selectedBillingType = null;
       _selectedDieselInclusion = null;
       _paymentMode = PaymentMode.cash;
-      _photoCaptured = false;
+      _photoPath = null;
     });
   }
 
@@ -635,16 +637,26 @@ class _MachinesEntryScreenState extends State<MachinesEntryScreen> {
   Widget _buildPhotoCard() {
     return PhotoCaptureCard(
       label: 'Driver + vehicle opening photo',
-      hint: _photoCaptured ? 'Photo captured ✓' : 'Tap to capture',
+      hint: 'Tap to capture',
       mandatory: true,
-      onTap: () {
-        setState(() => _photoCaptured = !_photoCaptured);
-        _showSnackbar(
-          _photoCaptured ? 'Opening photo captured' : 'Photo removed',
-          _photoCaptured ? AppTheme.success : AppTheme.warning,
-        );
-      },
+      imagePath: _photoPath,
+      onTap: _capturingPhoto ? null : _capturePhoto,
+      onClear: _photoPath == null ? null : () => setState(() => _photoPath = null),
     );
+  }
+
+  Future<void> _capturePhoto() async {
+    setState(() => _capturingPhoto = true);
+    final store = context.read<AppStore>();
+    final path = await store.capturePhoto(module: 'machines', label: 'opening_photo');
+    if (!mounted) return;
+    setState(() {
+      _capturingPhoto = false;
+      if (path != null) _photoPath = path;
+    });
+    if (path != null) {
+      _showSnackbar('Opening photo captured', AppTheme.success);
+    }
   }
 
   Widget _buildSummaryCard() {

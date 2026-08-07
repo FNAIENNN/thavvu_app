@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../providers/app_store.dart';
+import '../widgets/photo_capture_card.dart';
 
 class AttendanceScreen extends StatefulWidget {
   const AttendanceScreen({super.key});
@@ -239,7 +240,8 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
   String _selectedStatus = 'Present';
   bool _morningMarked = false;
   bool _eveningMarked = false;
-  bool _photoCaptured = false;
+  String? _photoPath;
+  bool _capturingPhoto = false;
   bool _isSubmitting = false;
   String? _selectedWorkerId;
 
@@ -416,19 +418,30 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
           ],
         ),
         const SizedBox(height: 16),
-        _buildPhotoCard(
-          _photoCaptured ? 'Session attendance photo captured ✓' : 'Session attendance photo',
-          required: true,
-          onTap: () {
-            setState(() => _photoCaptured = !_photoCaptured);
-            _showSnackbar(
-              _photoCaptured ? 'Photo captured' : 'Photo removed',
-              _photoCaptured ? AppTheme.success : AppTheme.warning,
-            );
-          },
+        PhotoCaptureCard(
+          label: 'Session attendance photo',
+          hint: 'Tap to capture',
+          mandatory: true,
+          imagePath: _photoPath,
+          onTap: _capturingPhoto ? null : _capturePhoto,
+          onClear: _photoPath == null ? null : () => setState(() => _photoPath = null),
         ),
       ],
     );
+  }
+
+  Future<void> _capturePhoto() async {
+    setState(() => _capturingPhoto = true);
+    final store = context.read<AppStore>();
+    final path = await store.capturePhoto(module: 'attendance', label: 'session_photo');
+    if (!mounted) return;
+    setState(() {
+      _capturingPhoto = false;
+      if (path != null) _photoPath = path;
+    });
+    if (path != null) {
+      _showSnackbar('Photo captured', AppTheme.success);
+    }
   }
 
   Widget _buildSessionCard(
@@ -580,67 +593,6 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
     );
   }
 
-  Widget _buildPhotoCard(String label, {bool required = false, VoidCallback? onTap}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [AppTheme.infoBg, AppTheme.surface],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppTheme.info.withOpacity(0.25)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                color: AppTheme.info.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              alignment: Alignment.center,
-              child: const Text('📷', style: TextStyle(fontSize: 24)),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    required ? 'Tap to capture (Required)' : 'Tap to capture (Optional)',
-                    style: const TextStyle(fontSize: 12, color: AppTheme.info),
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppTheme.info.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.camera_alt, size: 20, color: AppTheme.info),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildStep(int number, String title, Widget content, {Widget? badge}) {
     return Container(
       padding: const EdgeInsets.all(18),
@@ -746,7 +698,8 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
       morning: _morningMarked,
       evening: _eveningMarked,
       method: _selectedMethod,
-      photoCaptured: _photoCaptured,
+      photoCaptured: _photoPath != null,
+      photoPath: _photoPath,
     );
 
     if (!mounted) return;
@@ -755,7 +708,7 @@ class _RegularWorkersTabState extends State<RegularWorkersTab> {
       _selectedWorkerId = null;
       _morningMarked = false;
       _eveningMarked = false;
-      _photoCaptured = false;
+      _photoPath = null;
     });
     _showSnackbar('Attendance marked successfully!', AppTheme.success);
   }
@@ -789,6 +742,8 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
   String _selectedStatus = 'Present';
   bool _isCreating = false;
   bool _isSubmitting = false;
+  String? _photoPath;
+  bool _capturingPhoto = false;
 
   @override
   void dispose() {
@@ -1030,10 +985,31 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
             ],
           ),
           const SizedBox(height: 16),
-          _buildPhotoCard('Attendance live photo', required: true),
+          PhotoCaptureCard(
+            label: 'Attendance live photo',
+            hint: 'Tap to capture',
+            mandatory: true,
+            imagePath: _photoPath,
+            onTap: _capturingPhoto ? null : _capturePhoto,
+            onClear: _photoPath == null ? null : () => setState(() => _photoPath = null),
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _capturePhoto() async {
+    setState(() => _capturingPhoto = true);
+    final store = context.read<AppStore>();
+    final path = await store.capturePhoto(module: 'attendance', label: 'outside_worker_photo');
+    if (!mounted) return;
+    setState(() {
+      _capturingPhoto = false;
+      if (path != null) _photoPath = path;
+    });
+    if (path != null) {
+      _showSnackbar('Photo captured', AppTheme.success);
+    }
   }
 
   Widget _buildStatusChip(String label, Color color, IconData icon) {
@@ -1066,60 +1042,6 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildPhotoCard(String label, {bool required = false}) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.infoBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.info.withOpacity(0.25)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: AppTheme.info.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            alignment: Alignment.center,
-            child: const Text('📷', style: TextStyle(fontSize: 22)),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  required ? 'Tap to capture (Required)' : 'Tap to capture',
-                  style: const TextStyle(fontSize: 11, color: AppTheme.info),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppTheme.info.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.camera_alt, size: 18, color: AppTheme.info),
-          ),
-        ],
       ),
     );
   }
@@ -1170,11 +1092,14 @@ class _OutsideWorkersTabState extends State<OutsideWorkersTab> {
       workerId: _selectedWorker!,
       status: _selectedStatus,
       method: 'Manual',
+      photoCaptured: _photoPath != null,
+      photoPath: _photoPath,
     );
     if (!mounted) return;
     setState(() {
       _isSubmitting = false;
       _selectedWorker = null;
+      _photoPath = null;
     });
     _showSnackbar('Outside worker attendance marked!', AppTheme.success);
   }
