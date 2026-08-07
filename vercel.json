@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "installCommand": "cd api && npm install",
+  "buildCommand": "if [ ! -d \"$HOME/flutter\" ]; then git clone https://github.com/flutter/flutter.git -b stable --depth 1 $HOME/flutter; fi; export PATH=\"$HOME/flutter/bin:$PATH\"; flutter config --enable-web && flutter pub get && flutter build web --release",
+  "outputDirectory": "build/web",
+  "functions": {
+    "api/index.js": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/flutter_service_worker.js",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    }
+  ]
+}

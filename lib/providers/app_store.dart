@@ -2,15 +2,52 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_models.dart';
+import '../models/stock_catalog.dart';
+import '../services/remote_repository.dart';
+import '../services/photo_service.dart';
 
 /// Local backend / application state for Thavvu Supervisor.
 /// Persists key collections to SharedPreferences as JSON.
+///
+/// When a live Supabase Postgres connection is reachable and the signed-in
+/// user is a real remote profile (HOD/Supervisor from `app_credentials`),
+/// this store additionally hydrates a parallel set of `remote*` collections
+/// from [RemoteRepository] and routes key mutations to the backend. The
+/// original local/demo collections and workflows are left completely
+/// untouched so the app keeps working fully offline (or with the bundled
+/// demo account) exactly as before.
 class AppStore extends ChangeNotifier {
   static const _storageKey = 'thavvu_app_store_v1';
   static const _sessionKey = 'thavvu_session_email';
+  static const _profileKey = 'thavvu_remote_profile';
+  static const _activeSiteKey = 'thavvu_active_site_id';
+  static const _activePointKey = 'thavvu_active_point_id';
+
+  AppStore({RemoteRepository? remote}) : remote = remote ?? RemoteRepository();
 
   bool ready = false;
   AppUser? currentUser;
+
+  /// Backend access. See class doc for how remote state layers on top of the
+  /// local/offline collections below.
+  final RemoteRepository remote;
+  bool remoteEnabled = false;
+  Profile? currentProfile;
+  String? activeSiteId;
+  String? activeThavvuPointId;
+
+  // ── Remote-hydrated collections (populated only for a real remote login) ──
+  final List<WorkSite> remoteSites = [];
+  final List<ThavvuPoint> remoteThavvuPoints = [];
+  final List<StockItemDef> remoteStockItems = [];
+  final List<StockBalance> remoteStockBalances = [];
+  final List<MachineRecord> remoteMachines = [];
+  final List<DailyLog> remoteDailyLogs = [];
+  final List<StockOrder> remoteStockOrders = [];
+  final List<TransferRecord> remoteTransfers = [];
+  final List<AppTask> remoteTasks = [];
+  final List<Supplier> suppliers = [];
+  final List<SupplierPayment> supplierPayments = [];
 
   final List<AppUser> users = [];
   final List<MachineRecord> machines = [];
@@ -54,8 +91,60 @@ class AppStore extends ChangeNotifier {
       }
     }
 
+    // Best-effort remote connectivity check. Never blocks local/offline use —
+    // any failure (no network, DNS, auth) simply leaves remoteEnabled=false
+    // and the app keeps working entirely off the local seed data above.
+    try {
+      remoteEnabled = await remote.ping().timeout(
+        const Duration(seconds: 6),
+        onTimeout: () => false,
+      );
+    } catch (_) {
+      remoteEnabled = false;
+    }
+
+    if (remoteEnabled) {
+      final profileRaw = prefs.getString(_profileKey);
+      if (profileRaw != null) {
+        try {
+          currentProfile = Profile.fromJson(
+            Map<String, dynamic>.from(jsonDecode(profileRaw) as Map),
+          );
+          activeSiteId = prefs.getString(_activeSiteKey);
+          activeThavvuPointId = prefs.getString(_activePointKey);
+        } catch (_) {
+          currentProfile = null;
+        }
+      }
+      if (currentProfile != null) {
+        try {
+          await hydrateFromRemote();
+        } catch (_) {
+          // Keep whatever restored profile/session we have; screens fall
+          // back to empty remote lists until connectivity returns.
+        }
+      }
+    }
+
     ready = true;
     notifyListeners();
+  }
+
+  Future<void> _persistRemoteSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (currentProfile == null) {
+      await prefs.remove(_profileKey);
+      await prefs.remove(_activeSiteKey);
+      await prefs.remove(_activePointKey);
+      return;
+    }
+    await prefs.setString(_profileKey, jsonEncode(currentProfile!.toJson()));
+    if (activeSiteId != null) {
+      await prefs.setString(_activeSiteKey, activeSiteId!);
+    }
+    if (activeThavvuPointId != null) {
+      await prefs.setString(_activePointKey, activeThavvuPointId!);
+    }
   }
 
   Future<void> _persist() async {
@@ -70,6 +159,536 @@ class AppStore extends ChangeNotifier {
     } else {
       await prefs.setString(_sessionKey, email);
     }
+  }
+
+  // ── Remote hydration & site/point selection ──────────────────────────────
+
+  bool get isHod => currentProfile?.isHod ?? false;
+  bool get isSupervisor => currentProfile == null ? true : currentProfile!.isSupervisor;
+
+  /// Scope for HOD-owned data: the HOD's own id when signed in as HOD, or
+  /// their assigned HOD's id when signed in as a supervisor.
+  String? get effectiveHodId =>
+      currentProfile == null ? null : (currentProfile!.isHod ? currentProfile!.id : currentProfile!.hodId);
+
+  WorkSite _mapSite(Map<String, dynamic> row) => WorkSite(
+        id: (row['id'] ?? row['site_id']).toString(),
+        name: (row['name'] ?? row['site_name'] ?? '').toString(),
+        location: (row['place'] ?? '').toString(),
+        code: (row['id'] ?? row['site_id'] ?? '').toString(),
+      );
+
+  ThavvuPoint _mapPoint(Map<String, dynamic> row, {String? fallbackSiteId}) => ThavvuPoint(
+        id: row['id'].toString(),
+        siteId: (row['site_id'] ?? fallbackSiteId ?? '').toString(),
+        name: (row['point_name'] ?? '').toString(),
+        code: row['id'].toString(),
+        type: 'field',
+      );
+
+  StockItemDef _mapStockItem(Map<String, dynamic> row) {
+    final name = (row['item_name'] ?? row['name'] ?? '').toString();
+    final category = (row['category'] ?? row['group_name'] ?? StockCategory.other).toString();
+    final unit = (row['primary_uom'] ?? row['uom'] ?? StockCatalog.unitForName(name)).toString();
+    return StockItemDef(
+      id: (row['code'] ?? row['id'] ?? name).toString(),
+      name: name,
+      category: category,
+      unit: unit,
+      reorderLevel: (row['reorder_level'] as num?)?.toDouble() ?? 20,
+    );
+  }
+
+  StockBalance _mapStockBalance(Map<String, dynamic> row) {
+    final name = (row['item_name'] ?? '').toString();
+    final unit = unitForItem(name);
+    final category = StockCatalog.categoryForName(name);
+    return StockBalance(
+      stockPointId: (row['stock_point_id'] ?? '').toString(),
+      itemId: (row['item_id'] ?? row['item_code'] ?? '').toString(),
+      itemName: name,
+      category: category,
+      unit: unit,
+      quantity: (row['available_qty'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  Supplier _mapSupplier(Map<String, dynamic> row) => Supplier(
+        id: row['id'].toString(),
+        name: (row['name'] ?? '').toString(),
+        phone: (row['phone'] ?? '').toString(),
+        email: '',
+        category: (row['group_name'] ?? 'general').toString(),
+        siteId: row['site_id']?.toString(),
+        outstandingBalance: 0,
+        totalPaid: 0,
+        notes: (row['notes'] ?? '').toString(),
+        createdAt: _parseDate(row['created_at']) ?? DateTime.now(),
+      );
+
+  SupplierPayment _mapSupplierPayment(Map<String, dynamic> row) => SupplierPayment(
+        id: row['id'].toString(),
+        supplierId: '',
+        supplierName: (row['supplier_name'] ?? '').toString(),
+        amount: (row['amount'] as num?)?.toDouble() ?? 0,
+        mode: (row['method'] ?? 'cash').toString(),
+        reference: '',
+        relatedModule: (row['request_type'] ?? '').toString(),
+        siteId: (row['site_id'] ?? '').toString(),
+        photoPath: row['payment_proof'] as String?,
+        status: (row['status'] ?? 'pending').toString(),
+        createdAt: _parseDate(row['requested_at'] ?? row['created_at']) ?? DateTime.now(),
+      );
+
+  MachineRecord _mapMachine(Map<String, dynamic> row) => MachineRecord(
+        id: row['id'].toString(),
+        machineId: row['id'].toString(),
+        operatorName: (row['operator_name'] ?? '').toString(),
+        vehicleNumber: (row['vehicle_number'] ?? '').toString(),
+        vehicleType: (row['vehicle_type'] ?? '').toString(),
+        billingType: 'Daily',
+        workingAmount: 0,
+        status: 'approved',
+        siteId: (row['site_id'] ?? '').toString(),
+        createdAt: _parseDate(row['created_at']) ?? DateTime.now(),
+      );
+
+  DailyLog _mapDailyLog(Map<String, dynamic> row) => DailyLog(
+        id: row['id'].toString(),
+        machineId: (row['machine_id'] ?? '').toString(),
+        machineName: (row['machine_id'] ?? '').toString(),
+        usedAmount: 0,
+        dieselAmount: 0,
+        betaAmount: (row['beta_amount'] as num?)?.toDouble() ?? 0,
+        notes: (row['notes'] ?? '').toString(),
+        siteId: (row['site_id'] ?? '').toString(),
+        thavvuPointId: (row['thavvu_point_id'] ?? '').toString(),
+        photoPath: row['bill_file_path'] as String?,
+        status: (row['status'] ?? 'submitted').toString(),
+        hodNote: row['hod_note'] as String?,
+        createdAt: _parseDate(row['created_at'] ?? row['log_date']) ?? DateTime.now(),
+      );
+
+  StockOrder _mapStockOrder(Map<String, dynamic> row) => StockOrder(
+        id: row['id'].toString(),
+        stockPointId: (row['stock_point_id'] ?? '').toString(),
+        stockPointName: (row['stock_point_name'] ?? '').toString(),
+        item: (row['item_name'] ?? '').toString(),
+        quantity: ((row['quantity'] as num?) ?? 0).round(),
+        unit: (row['unit'] ?? 'Units').toString(),
+        category: StockCatalog.categoryForName((row['item_name'] ?? '').toString()),
+        siteId: (row['site_id'] ?? '').toString(),
+        thavvuPointId: (row['thavvu_point_id'] ?? '').toString(),
+        notes: (row['notes'] ?? '').toString(),
+        status: (row['status'] ?? 'pending').toString(),
+        createdAt: _parseDate(row['created_at']) ?? DateTime.now(),
+      );
+
+  TransferRecord _mapTransfer(Map<String, dynamic> row) => TransferRecord(
+        id: row['id'].toString(),
+        item: (row['item_name'] ?? '').toString(),
+        fromPoint: (row['from_thavvu_point'] ?? row['from_point'] ?? '').toString(),
+        toPoint: (row['to_thavvu_point'] ?? row['to_point'] ?? '').toString(),
+        quantity: ((row['quantity'] as num?) ?? 0).round(),
+        status: (row['status'] ?? 'pending_ack').toString(),
+        date: _fmtDate(_parseDate(row['initiated_at']) ?? DateTime.now()),
+        notes: (row['notes'] ?? '').toString(),
+        siteId: (row['site_id'] ?? '').toString(),
+        unit: (row['unit'] ?? 'Nos').toString(),
+        photoPath: row['photo_name'] as String?,
+        createdAt: _parseDate(row['initiated_at']) ?? DateTime.now(),
+      );
+
+  Worker _mapWorker(Map<String, dynamic> row) => Worker(
+        id: row['id'].toString(),
+        name: (row['name'] ?? '').toString(),
+        department: (row['department'] ?? '').toString(),
+        type: (row['is_temporary'] == true) ? 'outside' : 'regular',
+        wage: (row['wage'] as num?)?.toDouble(),
+        approved: (row['status']?.toString() ?? 'active') != 'inactive',
+      );
+
+  ActivityEvent _mapActivityEvent(Map<String, dynamic> row) => ActivityEvent(
+        id: row['id'].toString(),
+        type: (row['module'] ?? '').toString(),
+        title: (row['action'] ?? '').toString(),
+        detail: (row['summary'] ?? '').toString(),
+        siteId: (row['site_id'] ?? '').toString(),
+        thavvuPointId: (row['thavvu_point_id'] ?? '').toString(),
+        amount: row['unit'] == 'INR' ? (row['quantity'] as num?)?.toDouble() : null,
+        quantity: (row['quantity'] as num?)?.toDouble(),
+        unit: row['unit'] as String?,
+        createdAt: _parseDate(row['created_at']) ?? DateTime.now(),
+      );
+
+  DateTime? _parseDate(Object? v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    try {
+      return DateTime.parse(v.toString());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Resolve the display unit for a stock item name: prefer the live
+  /// `remoteStockItems` catalog, then fall back to the bundled
+  /// [StockCatalog] so units (Litres/Bags/Kg/etc.) are always sensible.
+  String unitForItem(String name) {
+    final needle = name.trim().toLowerCase();
+    for (final item in remoteStockItems) {
+      if (item.name.toLowerCase() == needle) return item.unit;
+    }
+    return StockCatalog.unitForName(name);
+  }
+
+  /// Stock catalog (remote when available, else the bundled catalog),
+  /// grouped by category for the "view by category" stock screens.
+  Map<String, List<StockItemDef>> get stockItemsByCategory {
+    final source = remoteStockItems.isNotEmpty ? remoteStockItems : StockCatalog.items;
+    final grouped = <String, List<StockItemDef>>{};
+    for (final item in source) {
+      grouped.putIfAbsent(item.category, () => []).add(item);
+    }
+    return grouped;
+  }
+
+  /// Remote stock balances scoped to the active Thavvu Point; falls back to
+  /// every remote balance known when no point is selected yet.
+  List<StockBalance> get balancesForActivePoint {
+    if (activeThavvuPointId == null) return remoteStockBalances;
+    final scoped = remoteStockBalances
+        .where((b) => b.stockPointId == activeThavvuPointId)
+        .toList();
+    return scoped.isEmpty ? remoteStockBalances : scoped;
+  }
+
+  Future<void> setActiveSite(String siteId) async {
+    if (activeSiteId == siteId) return;
+    activeSiteId = siteId;
+    activeThavvuPointId = null;
+    await _loadPointsForActiveSite();
+    if (remoteThavvuPoints.isNotEmpty) {
+      activeThavvuPointId = remoteThavvuPoints.first.id;
+    }
+    await _persistRemoteSession();
+    try {
+      await hydrateFromRemote();
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<void> setActiveThavvuPoint(String pointId) async {
+    if (activeThavvuPointId == pointId) return;
+    activeThavvuPointId = pointId;
+    await _persistRemoteSession();
+    try {
+      await hydrateFromRemote();
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<void> _loadPointsForActiveSite() async {
+    remoteThavvuPoints.clear();
+    if (activeSiteId == null) return;
+    try {
+      final rows = await remote.thavvuPointsForSite(activeSiteId!);
+      remoteThavvuPoints.addAll(rows.map((r) => _mapPoint(r, fallbackSiteId: activeSiteId)));
+    } catch (_) {}
+  }
+
+  /// Loads sites/points/stock/suppliers/machines/logs/orders/transfers/tasks
+  /// scoped to the current remote profile + active site/point. Every fetch
+  /// is independent and best-effort so a single failing table never blocks
+  /// the rest of the dashboard from loading.
+  Future<void> hydrateFromRemote() async {
+    if (!remoteEnabled || currentProfile == null) return;
+    final hodId = effectiveHodId;
+
+    try {
+      List<Map<String, dynamic>> siteRows;
+      if (currentProfile!.isHod) {
+        siteRows = await remote.allSites(hodId: hodId);
+      } else {
+        final pts = await remote.pointsForSupervisor(currentProfile!.id);
+        final seen = <String>{};
+        siteRows = [];
+        for (final p in pts) {
+          final sid = p['site_id']?.toString();
+          if (sid == null || !seen.add(sid)) continue;
+          siteRows.add({'id': sid, 'name': p['site_name']});
+        }
+        if (siteRows.isEmpty) siteRows = await remote.allSites(hodId: hodId);
+      }
+      remoteSites
+        ..clear()
+        ..addAll(siteRows.map(_mapSite));
+    } catch (_) {}
+
+    activeSiteId ??= remoteSites.isNotEmpty ? remoteSites.first.id : null;
+    if (activeSiteId != null && remoteThavvuPoints.isEmpty) {
+      await _loadPointsForActiveSite();
+    }
+    activeThavvuPointId ??= remoteThavvuPoints.isNotEmpty ? remoteThavvuPoints.first.id : null;
+
+    try {
+      final rows = await remote.stockItems();
+      remoteStockItems
+        ..clear()
+        ..addAll(rows.map(_mapStockItem));
+    } catch (_) {}
+
+    try {
+      final rows = await remote.stockBalances(thavvuPointId: activeThavvuPointId, hodId: hodId);
+      remoteStockBalances
+        ..clear()
+        ..addAll(rows.map(_mapStockBalance));
+    } catch (_) {}
+
+    try {
+      final rows = await remote.suppliers(siteId: activeSiteId, hodId: hodId);
+      suppliers
+        ..clear()
+        ..addAll(rows.map(_mapSupplier));
+    } catch (_) {}
+
+    try {
+      final rows = await remote.supplierPaymentRequests(siteId: activeSiteId, hodId: hodId);
+      supplierPayments
+        ..clear()
+        ..addAll(rows.map(_mapSupplierPayment));
+    } catch (_) {}
+
+    try {
+      final rows = await remote.machines(siteId: activeSiteId, hodId: hodId);
+      remoteMachines
+        ..clear()
+        ..addAll(rows.map(_mapMachine));
+    } catch (_) {}
+
+    try {
+      final rows = await remote.dailyLogs(siteId: activeSiteId, thavvuPointId: activeThavvuPointId, hodId: hodId);
+      remoteDailyLogs
+        ..clear()
+        ..addAll(rows.map(_mapDailyLog));
+    } catch (_) {}
+
+    try {
+      final rows = await remote.stockOrders(siteId: activeSiteId, thavvuPointId: activeThavvuPointId, hodId: hodId);
+      remoteStockOrders
+        ..clear()
+        ..addAll(rows.map(_mapStockOrder));
+    } catch (_) {}
+
+    try {
+      final rows = await remote.stockTransfers(siteId: activeSiteId, thavvuPointId: activeThavvuPointId, hodId: hodId);
+      remoteTransfers
+        ..clear()
+        ..addAll(rows.map(_mapTransfer));
+    } catch (_) {}
+
+    try {
+      final rows = await remote.workers(siteId: activeSiteId, thavvuPointId: activeThavvuPointId);
+      // Merge (don't replace) so the bundled demo workers stay usable offline
+      // while real DB workers become selectable — and, crucially, carry real
+      // UUIDs so `markAttendance` can sync to the remote `attendance_records`.
+      for (final row in rows) {
+        final mapped = _mapWorker(row);
+        final idx = workers.indexWhere((w) => w.id == mapped.id);
+        if (idx >= 0) {
+          workers[idx] = mapped;
+        } else {
+          workers.add(mapped);
+        }
+      }
+    } catch (_) {}
+
+    notifyListeners();
+  }
+
+  /// Fetches a fresh activity feed for the Reports screen. Not cached on the
+  /// store so callers can apply their own module/date filters live.
+  Future<List<ActivityEvent>> loadActivityReport({
+    String? module,
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    if (!remoteEnabled) return [];
+    try {
+      final rows = await remote.activityReport(
+        siteId: activeSiteId,
+        thavvuPointId: activeThavvuPointId,
+        module: module,
+        from: from,
+        to: to,
+        hodId: effectiveHodId,
+      );
+      return rows.map(_mapActivityEvent).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // ── Supplier payments (remote-first; no local/offline equivalent) ───────
+
+  Future<Map<String, dynamic>?> requestSupplierPayment({
+    required String supplierName,
+    required double amount,
+    String method = 'upi',
+    double? billAmount,
+    double? usedAmount,
+    String? photoPath,
+  }) async {
+    if (!remoteEnabled || currentProfile == null || activeSiteId == null) {
+      return null;
+    }
+    try {
+      final row = await remote.requestSupplierPayment(
+        siteId: activeSiteId!,
+        supplierName: supplierName,
+        amount: amount,
+        billAmount: billAmount,
+        usedAmount: usedAmount,
+        method: method,
+        paymentProof: photoPath,
+        hodId: effectiveHodId,
+      );
+      supplierPayments.insert(0, _mapSupplierPayment(row));
+      await _addNotification(
+        'Payment Requested',
+        '₹${amount.toStringAsFixed(0)} to $supplierName ($method)',
+        type: 'warning',
+      );
+      notifyListeners();
+      return row;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> reviewSupplierPayment(String requestId, String status) async {
+    if (!remoteEnabled) return;
+    try {
+      await remote.reviewSupplierPayment(
+        requestId: requestId,
+        status: status,
+        hodId: effectiveHodId,
+      );
+      final idx = supplierPayments.indexWhere((p) => p.id == requestId);
+      if (idx >= 0) {
+        supplierPayments[idx] = supplierPayments[idx].copyWith(status: status);
+      }
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  // ── HOD approvals over remote-hydrated collections ───────────────────────
+
+  Future<void> reviewRemoteDailyLog(String logId, String status, {String? hodNote}) async {
+    if (!remoteEnabled) return;
+    try {
+      await remote.reviewDailyLog(logId: logId, status: status, hodNote: hodNote, hodId: effectiveHodId);
+      final idx = remoteDailyLogs.indexWhere((l) => l.id == logId);
+      if (idx >= 0) {
+        remoteDailyLogs[idx] = remoteDailyLogs[idx].copyWith(status: status, hodNote: hodNote);
+      }
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> reviewRemoteStockOrder(String orderId, String status) async {
+    if (!remoteEnabled) return;
+    try {
+      await remote.reviewStockOrder(orderId: orderId, status: status, hodId: effectiveHodId);
+      final idx = remoteStockOrders.indexWhere((o) => o.id == orderId);
+      if (idx >= 0) {
+        remoteStockOrders[idx] = remoteStockOrders[idx].copyWith(status: status);
+      }
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> acknowledgeRemoteTransfer(String transferId) async {
+    if (!remoteEnabled) return;
+    try {
+      await remote.acknowledgeTransfer(transferId: transferId, receivedBy: currentProfile?.email, hodId: effectiveHodId);
+      final idx = remoteTransfers.indexWhere((t) => t.id == transferId);
+      if (idx >= 0) {
+        remoteTransfers[idx] = remoteTransfers[idx].copyWith(status: 'completed');
+      }
+      try {
+        final rows = await remote.stockBalances(thavvuPointId: activeThavvuPointId, hodId: effectiveHodId);
+        remoteStockBalances
+          ..clear()
+          ..addAll(rows.map(_mapStockBalance));
+      } catch (_) {}
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>?> initiateRemoteTransfer({
+    required String fromPointId,
+    required String fromPoint,
+    required String toPointId,
+    required String toPoint,
+    required String itemName,
+    required num quantity,
+    required String unit,
+    String notes = '',
+    String? photoPath,
+  }) async {
+    if (!remoteEnabled || currentProfile == null || activeSiteId == null) {
+      return null;
+    }
+    try {
+      final row = await remote.initiateTransfer(
+        siteId: activeSiteId!,
+        fromPointId: fromPointId,
+        fromPoint: fromPoint,
+        toPointId: toPointId,
+        toPoint: toPoint,
+        itemName: itemName,
+        quantity: quantity,
+        unit: unit,
+        notes: notes,
+        photoName: photoPath,
+        initiatedBy: currentProfile!.email,
+        hodId: effectiveHodId,
+        thavvuPointId: activeThavvuPointId,
+      );
+      if (row != null) {
+        remoteTransfers.insert(0, _mapTransfer(row));
+        notifyListeners();
+      }
+      return row;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── Photo capture + remote registration ──────────────────────────────────
+
+  /// Captures/picks a photo via [PhotoService] and, when a remote session is
+  /// active, best-effort registers it in `app_photo_uploads`. Always returns
+  /// the local file path (or null if the user cancelled) regardless of
+  /// remote connectivity so forms keep working offline.
+  Future<String?> capturePhoto({required String module, required String label}) async {
+    final path = await PhotoService.instance.capture(module: module, label: label);
+    if (path == null) return null;
+    if (remoteEnabled && currentProfile != null) {
+      try {
+        await remote.registerPhoto(
+          module: module,
+          label: label,
+          localPath: path,
+          siteId: activeSiteId,
+          thavvuPointId: activeThavvuPointId,
+          uploadedBy: currentProfile!.id,
+          hodId: effectiveHodId,
+        );
+      } catch (_) {}
+    }
+    return path;
   }
 
   Map<String, dynamic> _toJson() => {
@@ -331,6 +950,49 @@ class AppStore extends ChangeNotifier {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   Future<String?> login(String email, String password, {bool remember = false}) async {
+    // Remote-first: real HOD/Supervisor profiles live in Supabase Postgres
+    // (`profiles` + `app_credentials`). Any failure here (network, wrong
+    // remote password, unknown email) falls through to the local/demo
+    // account check below so the bundled seed data keeps working offline.
+    if (remoteEnabled) {
+      try {
+        final row = await remote.login(email, password);
+        if (row != null) {
+          final profile = Profile.fromRow(row);
+          currentProfile = profile;
+          activeSiteId = null;
+          activeThavvuPointId = null;
+          remoteSites.clear();
+          remoteThavvuPoints.clear();
+          await hydrateFromRemote();
+          currentUser = AppUser(
+            id: profile.id,
+            name: profile.name.isNotEmpty ? profile.name : profile.email,
+            email: profile.email,
+            password: '',
+            role: profile.isHod ? 'HOD' : 'Supervisor',
+            empId: profile.empId,
+            site: remoteSites.isNotEmpty ? remoteSites.first.name : '',
+            siteId: activeSiteId ?? '',
+            phone: profile.phone,
+            joinDate: '',
+            approved: true,
+            rememberMe: remember,
+          );
+          await _persistRemoteSession();
+          if (remember) {
+            await _setSession(email.trim());
+          } else {
+            await _setSession(null);
+          }
+          notifyListeners();
+          return null;
+        }
+      } catch (_) {
+        // Fall through to local/demo login below.
+      }
+    }
+
     await Future.delayed(const Duration(milliseconds: 600));
     AppUser? user;
     try {
@@ -397,7 +1059,22 @@ class AppStore extends ChangeNotifier {
 
   Future<void> logout() async {
     currentUser = null;
+    currentProfile = null;
+    activeSiteId = null;
+    activeThavvuPointId = null;
+    remoteSites.clear();
+    remoteThavvuPoints.clear();
+    remoteStockItems.clear();
+    remoteStockBalances.clear();
+    remoteMachines.clear();
+    remoteDailyLogs.clear();
+    remoteStockOrders.clear();
+    remoteTransfers.clear();
+    remoteTasks.clear();
+    suppliers.clear();
+    supplierPayments.clear();
     await _setSession(null);
+    await _persistRemoteSession();
     notifyListeners();
   }
 
@@ -433,6 +1110,7 @@ class AppStore extends ChangeNotifier {
     String supplierName = '',
     double supplierAmount = 0,
     String notes = '',
+    String? photoPath,
   }) async {
     await Future.delayed(const Duration(milliseconds: 400));
     final record = MachineRecord(
@@ -451,6 +1129,7 @@ class AppStore extends ChangeNotifier {
       supplierAmount: supplierAmount,
       notes: notes,
       status: 'pending',
+      photoPath: photoPath,
       createdAt: DateTime.now(),
     );
     machines.insert(0, record);
@@ -460,6 +1139,26 @@ class AppStore extends ChangeNotifier {
       type: 'warning',
     );
     await _persist();
+
+    if (remoteEnabled && currentProfile != null && activeSiteId != null) {
+      try {
+        await remote.submitMachine(
+          siteId: activeSiteId!,
+          machineName: vehicleType,
+          vehicleNumber: vehicleNumber,
+          vehicleType: vehicleType,
+          operatorName: operatorName,
+          createdBy: currentProfile!.id,
+          hodId: effectiveHodId,
+          openingPhotoPath: photoPath,
+        );
+        final rows = await remote.machines(siteId: activeSiteId, hodId: effectiveHodId);
+        remoteMachines
+          ..clear()
+          ..addAll(rows.map(_mapMachine));
+      } catch (_) {}
+    }
+
     notifyListeners();
     return record;
   }
@@ -498,6 +1197,7 @@ class AppStore extends ChangeNotifier {
     String notes = '',
     String paymentMode = 'cash',
     List<TimeBlockData> timeBlocks = const [],
+    String? photoPath,
   }) async {
     await Future.delayed(const Duration(milliseconds: 400));
     final log = DailyLog(
@@ -510,6 +1210,9 @@ class AppStore extends ChangeNotifier {
       notes: notes,
       paymentMode: paymentMode,
       timeBlocks: timeBlocks,
+      photoPath: photoPath,
+      siteId: activeSiteId ?? '',
+      thavvuPointId: activeThavvuPointId ?? '',
       createdAt: DateTime.now(),
     );
     dailyLogs.insert(0, log);
@@ -519,6 +1222,32 @@ class AppStore extends ChangeNotifier {
       type: 'success',
     );
     await _persist();
+
+    if (remoteEnabled && currentProfile != null && activeSiteId != null && activeThavvuPointId != null) {
+      try {
+        await remote.saveDailyLog(
+          siteId: activeSiteId!,
+          thavvuPointId: activeThavvuPointId!,
+          machineId: machineId,
+          supervisorId: currentProfile!.id,
+          workingHours: usedAmount,
+          betaAmount: betaAmount,
+          dieselOption: dieselAmount > 0 ? 'with_diesel' : 'without_diesel',
+          notes: notes,
+          billFilePath: photoPath,
+          hodId: effectiveHodId,
+        );
+        final rows = await remote.dailyLogs(
+          siteId: activeSiteId,
+          thavvuPointId: activeThavvuPointId,
+          hodId: effectiveHodId,
+        );
+        remoteDailyLogs
+          ..clear()
+          ..addAll(rows.map(_mapDailyLog));
+      } catch (_) {}
+    }
+
     notifyListeners();
     return log;
   }
@@ -582,6 +1311,7 @@ class AppStore extends ChangeNotifier {
     bool evening = false,
     String method = 'Manual',
     bool photoCaptured = false,
+    String? photoPath,
   }) async {
     final worker = workers.firstWhere((w) => w.id == workerId);
     final record = AttendanceRecord(
@@ -593,11 +1323,29 @@ class AppStore extends ChangeNotifier {
       morning: morning,
       evening: evening,
       method: method,
+      photoPath: photoPath,
+      siteId: activeSiteId ?? '',
       date: DateTime.now(),
       photoCaptured: photoCaptured,
     );
     attendance.insert(0, record);
     await _persist();
+
+    if (remoteEnabled && currentProfile != null && activeSiteId != null && activeThavvuPointId != null) {
+      try {
+        await remote.markAttendance(
+          siteId: activeSiteId!,
+          thavvuPointId: activeThavvuPointId!,
+          workerId: workerId,
+          status: status,
+          method: method,
+          photoUrl: photoPath,
+          markedBy: currentProfile!.id,
+          hodId: effectiveHodId,
+        );
+      } catch (_) {}
+    }
+
     notifyListeners();
     return record;
   }
@@ -632,20 +1380,26 @@ class AppStore extends ChangeNotifier {
     required String stockPointId,
     required String item,
     required int quantity,
-    String unit = 'Units',
+    String? unit,
     String notes = '',
     bool voiceNote = false,
+    String? photoPath,
   }) async {
     final point = stockPoints.firstWhere((p) => p.id == stockPointId);
+    final resolvedUnit = unit ?? unitForItem(item);
     final order = StockOrder(
       id: _nextId('ORD'),
       stockPointId: stockPointId,
       stockPointName: point.name,
       item: item,
       quantity: quantity,
-      unit: unit,
+      unit: resolvedUnit,
+      category: StockCatalog.categoryForName(item),
       notes: notes,
       voiceNote: voiceNote,
+      photoPath: photoPath,
+      siteId: activeSiteId ?? '',
+      thavvuPointId: activeThavvuPointId ?? '',
       createdAt: DateTime.now(),
     );
     stockOrders.insert(0, order);
@@ -655,6 +1409,31 @@ class AppStore extends ChangeNotifier {
       type: 'warning',
     );
     await _persist();
+
+    if (remoteEnabled && currentProfile != null && activeSiteId != null && activeThavvuPointId != null) {
+      try {
+        await remote.raiseStockOrder(
+          siteId: activeSiteId!,
+          thavvuPointId: activeThavvuPointId!,
+          stockPointName: point.name,
+          itemName: item,
+          quantity: quantity,
+          unit: resolvedUnit,
+          notes: notes,
+          placedBy: currentProfile!.email,
+          hodId: effectiveHodId,
+        );
+        final rows = await remote.stockOrders(
+          siteId: activeSiteId,
+          thavvuPointId: activeThavvuPointId,
+          hodId: effectiveHodId,
+        );
+        remoteStockOrders
+          ..clear()
+          ..addAll(rows.map(_mapStockOrder));
+      } catch (_) {}
+    }
+
     notifyListeners();
     return order;
   }
@@ -702,6 +1481,7 @@ class AppStore extends ChangeNotifier {
     required String item,
     required int quantity,
     String reason = '',
+    String? photoPath,
   }) async {
     final ret = StockReturn(
       id: _nextId('RET'),
@@ -709,6 +1489,7 @@ class AppStore extends ChangeNotifier {
       item: item,
       quantity: quantity,
       reason: reason,
+      photoPath: photoPath,
       createdAt: DateTime.now(),
     );
     stockReturns.insert(0, ret);
@@ -762,6 +1543,7 @@ class AppStore extends ChangeNotifier {
     required String item,
     required int quantity,
     String notes = '',
+    String? photoPath,
   }) async {
     if (fromPoint == toPoint) return null;
     final fromIdx = stockPoints.indexWhere((p) => p.name == fromPoint);
@@ -783,6 +1565,7 @@ class AppStore extends ChangeNotifier {
       status: 'pending_ack',
       date: _fmtDate(DateTime.now()),
       notes: notes,
+      photoPath: photoPath,
       createdAt: DateTime.now(),
     );
     transfers.insert(0, record);
@@ -805,6 +1588,40 @@ class AppStore extends ChangeNotifier {
       type: 'info',
     );
     await _persist();
+
+    if (remoteEnabled && currentProfile != null && activeSiteId != null) {
+      try {
+        final fromRemote = remoteThavvuPoints.firstWhere(
+          (p) => p.name.toLowerCase() == fromPoint.toLowerCase(),
+          orElse: () => remoteThavvuPoints.isNotEmpty ? remoteThavvuPoints.first : const ThavvuPoint(id: '', siteId: '', name: '', code: ''),
+        );
+        final toRemote = remoteThavvuPoints.firstWhere(
+          (p) => p.name.toLowerCase() == toPoint.toLowerCase(),
+          orElse: () => remoteThavvuPoints.isNotEmpty ? remoteThavvuPoints.last : const ThavvuPoint(id: '', siteId: '', name: '', code: ''),
+        );
+        if (fromRemote.id.isNotEmpty && toRemote.id.isNotEmpty) {
+          final row = await remote.initiateTransfer(
+            siteId: activeSiteId!,
+            fromPointId: fromRemote.id,
+            fromPoint: fromPoint,
+            toPointId: toRemote.id,
+            toPoint: toPoint,
+            itemName: item,
+            quantity: quantity,
+            unit: unitForItem(item),
+            notes: notes,
+            photoName: photoPath,
+            initiatedBy: currentProfile!.email,
+            hodId: effectiveHodId,
+            thavvuPointId: activeThavvuPointId,
+          );
+          if (row != null) {
+            remoteTransfers.insert(0, _mapTransfer(row));
+          }
+        }
+      } catch (_) {}
+    }
+
     notifyListeners();
     return record;
   }
@@ -847,6 +1664,7 @@ class AppStore extends ChangeNotifier {
     required double rate,
     double fuel = 0,
     String notes = '',
+    String? photoPath,
   }) async {
     final record = RentalRecord(
       id: 'RNT-${DateTime.now().year}-${(34 + rentals.length).toString().padLeft(4, '0')}',
@@ -855,6 +1673,7 @@ class AppStore extends ChangeNotifier {
       rate: rate,
       fuel: fuel,
       notes: notes,
+      photoPath: photoPath,
       startDate: DateTime.now().toIso8601String().split('T').first,
       createdAt: DateTime.now(),
     );

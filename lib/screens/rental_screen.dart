@@ -5,6 +5,7 @@ import '../models/app_models.dart';
 import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/photo_capture_card.dart';
 
 class RentalScreen extends StatefulWidget {
   const RentalScreen({super.key});
@@ -18,6 +19,8 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
   String _billingMode = 'Per day';
   bool _isOpening = false;
   bool _isClosing = false;
+  String? _photoPath;
+  bool _capturingPhoto = false;
   
   final TextEditingController _itemController = TextEditingController();
   final TextEditingController _rateController = TextEditingController();
@@ -59,11 +62,26 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
           rate: double.tryParse(_rateController.text) ?? 0,
           fuel: double.tryParse(_fuelController.text) ?? 0,
           notes: _notesController.text,
+          photoPath: _photoPath,
         );
     if (!mounted) return;
     setState(() => _isOpening = false);
     _showSnackbar('Rental record ${record.id} opened for ${record.item}', AppTheme.success);
     _clearOpenForm();
+  }
+
+  Future<void> _capturePhoto() async {
+    setState(() => _capturingPhoto = true);
+    final store = context.read<AppStore>();
+    final path = await store.capturePhoto(module: 'rental', label: 'checkin_photo');
+    if (!mounted) return;
+    setState(() {
+      _capturingPhoto = false;
+      if (path != null) _photoPath = path;
+    });
+    if (path != null) {
+      _showSnackbar('Check-in photo captured', AppTheme.success);
+    }
   }
 
   Future<void> _closeRental() async {
@@ -95,6 +113,7 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
     _rateController.clear();
     _fuelController.clear();
     _notesController.clear();
+    setState(() => _photoPath = null);
   }
 
   void _showSnackbar(String message, Color color) {
@@ -477,6 +496,14 @@ class _RentalScreenState extends State<RentalScreen> with SingleTickerProviderSt
             filled: true,
             fillColor: AppTheme.surface,
           ),
+        ),
+        const SizedBox(height: 12),
+        PhotoCaptureCard(
+          label: 'Equipment check-in photo (optional)',
+          hint: 'Tap to capture',
+          imagePath: _photoPath,
+          onTap: _capturingPhoto ? null : _capturePhoto,
+          onClear: _photoPath == null ? null : () => setState(() => _photoPath = null),
         ),
       ],
     );

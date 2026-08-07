@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../widgets/payment_mode_selector.dart';
 import '../providers/app_store.dart';
 import '../models/app_models.dart';
+import '../widgets/photo_capture_card.dart';
 
 class DailyDataScreen extends StatefulWidget {
   const DailyDataScreen({super.key});
@@ -21,6 +22,8 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
   final TextEditingController _notesController = TextEditingController();
   bool _isSubmitting = false;
   PaymentMode _paymentMode = PaymentMode.cash;
+  String? _photoPath;
+  bool _capturingPhoto = false;
 
   @override
   void initState() {
@@ -87,9 +90,10 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
     }
 
     final store = context.read<AppStore>();
+    final allMachines = [...store.approvedMachines, ...store.remoteMachines];
     MachineRecord? machine;
     try {
-      machine = store.approvedMachines.firstWhere((m) => m.id == _selectedMachine);
+      machine = allMachines.firstWhere((m) => m.id == _selectedMachine);
     } catch (_) {
       machine = null;
     }
@@ -119,6 +123,7 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
       notes: _notesController.text.trim(),
       paymentMode: _paymentModeValue(_paymentMode),
       timeBlocks: timeBlocks,
+      photoPath: _photoPath,
     );
 
     if (!mounted) return;
@@ -146,7 +151,22 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
     setState(() {
       _selectedMachine = null;
       _paymentMode = PaymentMode.cash;
+      _photoPath = null;
     });
+  }
+
+  Future<void> _capturePhoto() async {
+    setState(() => _capturingPhoto = true);
+    final store = context.read<AppStore>();
+    final path = await store.capturePhoto(module: 'daily_data', label: 'bill_photo');
+    if (!mounted) return;
+    setState(() {
+      _capturingPhoto = false;
+      if (path != null) _photoPath = path;
+    });
+    if (path != null) {
+      _showSnackbar('Bill photo captured', AppTheme.success);
+    }
   }
 
   void _showSnackbar(String message, Color color) {
@@ -231,6 +251,13 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
               'Additional Notes',
               _buildNotesField(),
               color: AppTheme.info,
+            ),
+            const SizedBox(height: 12),
+            _buildStepCard(
+              '8',
+              'Bill / Diesel Slip Photo',
+              _buildPhotoCard(),
+              color: AppTheme.warning,
             ),
             const SizedBox(height: 20),
             _buildSummaryCard(),
@@ -392,7 +419,8 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
   }
 
   Widget _buildMachineDropdown() {
-    final machines = context.watch<AppStore>().approvedMachines;
+    final store = context.watch<AppStore>();
+    final machines = [...store.approvedMachines, ...store.remoteMachines];
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
@@ -712,6 +740,16 @@ class _DailyDataScreenState extends State<DailyDataScreen> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       ),
+    );
+  }
+
+  Widget _buildPhotoCard() {
+    return PhotoCaptureCard(
+      label: 'Bill / diesel slip photo (optional)',
+      hint: 'Tap to capture',
+      imagePath: _photoPath,
+      onTap: _capturingPhoto ? null : _capturePhoto,
+      onClear: _photoPath == null ? null : () => setState(() => _photoPath = null),
     );
   }
 

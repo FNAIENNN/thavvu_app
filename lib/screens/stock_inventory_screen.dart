@@ -4,6 +4,7 @@ import '../models/app_models.dart';
 import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
+import '../widgets/photo_capture_card.dart';
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 class StockInventoryScreen extends StatefulWidget {
@@ -107,6 +108,8 @@ class _ViewStockTab extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildHeader(),
+          const SizedBox(height: 16),
+          const _RemoteStockByCategory(),
           const SizedBox(height: 16),
           _buildStockPointSelector(),
           const SizedBox(height: 16),
@@ -413,6 +416,109 @@ class _ViewStockTab extends StatelessWidget {
   }
 }
 
+// ─── Remote Stock By Category ─────────────────────────────────────────────────
+/// Live view of the active Thavvu Point's stock, grouped by category with the
+/// correct unit for each item (Litres for diesel/petrol, Bags/Kg for
+/// cement/chemicals, etc.). Only shown when a remote session is active.
+class _RemoteStockByCategory extends StatelessWidget {
+  const _RemoteStockByCategory();
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    if (!store.remoteEnabled || store.currentProfile == null) {
+      return const SizedBox.shrink();
+    }
+    final balances = store.balancesForActivePoint;
+    final grouped = <String, List<StockBalance>>{};
+    for (final b in balances) {
+      grouped.putIfAbsent(b.category, () => []).add(b);
+    }
+    String? pointName;
+    for (final p in store.remoteThavvuPoints) {
+      if (p.id == store.activeThavvuPointId) {
+        pointName = p.name;
+        break;
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.border, width: 0.8),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.cloud_done_outlined, color: AppTheme.info, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  pointName != null ? 'Live Stock — $pointName' : 'Live Stock (by category)',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (grouped.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'No live balances recorded for this point yet',
+                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+              ),
+            )
+          else
+            ...grouped.entries.map((entry) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        entry.key,
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary),
+                      ),
+                      const SizedBox(height: 6),
+                      ...entry.value.map((b) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(b.itemName, style: const TextStyle(fontSize: 13)),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: b.quantity <= 0 ? AppTheme.dangerBg : AppTheme.successBg,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    '${b.quantity.toStringAsFixed(b.quantity == b.quantity.roundToDouble() ? 0 : 1)} ${b.unit}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: b.quantity <= 0 ? AppTheme.danger : AppTheme.success,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )),
+                    ],
+                  ),
+                )),
+        ],
+      ),
+    );
+  }
+}
+
 class _StatCell extends StatelessWidget {
   final String label, value;
   final IconData icon;
@@ -567,19 +673,33 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
   String? _selectedItem;
   String? _selectedStockPoint;
   bool _voiceNote = false;
+  String? _photoPath;
+  bool _capturingPhoto = false;
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _purposeController = TextEditingController();
   bool _isSubmitting = false;
   
   final String _orderId = 'ORD-2024-${(DateTime.now().millisecondsSinceEpoch % 9000 + 1000)}';
-  
-  static const List<String> _items = ['Diesel', 'Engine Oil', 'Hydraulic Fluid', 'Bolts & Nuts', 'Grease', 'Coolant', 'Air Filter'];
 
   @override
   void dispose() {
     _quantityController.dispose();
     _purposeController.dispose();
     super.dispose();
+  }
+
+  Future<void> _capturePhoto() async {
+    setState(() => _capturingPhoto = true);
+    final store = context.read<AppStore>();
+    final path = await store.capturePhoto(module: 'stock_order', label: 'order_photo');
+    if (!mounted) return;
+    setState(() {
+      _capturingPhoto = false;
+      if (path != null) _photoPath = path;
+    });
+    if (path != null) {
+      _showSnackbar('Photo attached to order', AppTheme.success);
+    }
   }
 
   Future<void> _submitOrder() async {
@@ -602,12 +722,15 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
     }
 
     setState(() => _isSubmitting = true);
-    final order = await context.read<AppStore>().raiseStockOrder(
+    final store = context.read<AppStore>();
+    final order = await store.raiseStockOrder(
           stockPointId: _selectedStockPoint!,
           item: _selectedItem!,
           quantity: quantity,
+          unit: store.unitForItem(_selectedItem!),
           notes: _purposeController.text,
           voiceNote: _voiceNote,
+          photoPath: _photoPath,
         );
     if (!mounted) return;
     setState(() => _isSubmitting = false);
@@ -620,6 +743,7 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
       _selectedStockPoint = null;
       _selectedItem = null;
       _voiceNote = false;
+      _photoPath = null;
       _quantityController.clear();
       _purposeController.clear();
     });
@@ -856,6 +980,9 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
   }
 
   Widget _buildOrderDetails() {
+    final store = context.watch<AppStore>();
+    final byCategory = store.stockItemsByCategory;
+    final selectedUnit = _selectedItem != null ? store.unitForItem(_selectedItem!) : null;
     return Column(
       children: [
         DropdownButtonFormField<String>(
@@ -866,10 +993,15 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
             prefixIcon: Icon(Icons.category_outlined, size: 18),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
-          items: _items.map((item) => DropdownMenuItem(
-            value: item,
-            child: Text(item, style: const TextStyle(fontSize: 13)),
-          )).toList(),
+          items: byCategory.entries.expand((entry) => entry.value.map((item) => DropdownMenuItem(
+                value: item.name,
+                child: Row(
+                  children: [
+                    Expanded(child: Text(item.name, style: const TextStyle(fontSize: 13))),
+                    Text(item.unit, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                  ],
+                ),
+              ))).toList(),
           onChanged: (value) => setState(() => _selectedItem = value),
         ),
         const SizedBox(height: 12),
@@ -878,6 +1010,7 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
           keyboardType: TextInputType.number,
           decoration: InputDecoration(
             labelText: 'Quantity Required',
+            suffixText: selectedUnit,
             prefixIcon: Icon(Icons.numbers, size: 18),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
@@ -895,6 +1028,14 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
         ),
         const SizedBox(height: 12),
         _buildVoiceNoteButton(),
+        const SizedBox(height: 12),
+        PhotoCaptureCard(
+          label: 'Order reference photo (optional)',
+          hint: 'Tap to capture',
+          imagePath: _photoPath,
+          onTap: _capturingPhoto ? null : _capturePhoto,
+          onClear: _photoPath == null ? null : () => setState(() => _photoPath = null),
+        ),
       ],
     );
   }
@@ -1003,14 +1144,14 @@ class _ReturnTab extends StatefulWidget {
 
 class _ReturnTabState extends State<_ReturnTab> {
   String? _selectedItem;
+  String? _photoPath;
+  bool _capturingPhoto = false;
   final TextEditingController _batchController = TextEditingController();
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _reasonController = TextEditingController();
   bool _isSubmitting = false;
   
   final String _returnId = 'RET-2024-${(DateTime.now().millisecondsSinceEpoch % 9000 + 1000)}';
-  
-  static const List<String> _items = ['Engine Oil', 'Bolts & Nuts', 'Hydraulic Fluid', 'Grease', 'Coolant'];
 
   @override
   void dispose() {
@@ -1018,6 +1159,20 @@ class _ReturnTabState extends State<_ReturnTab> {
     _quantityController.dispose();
     _reasonController.dispose();
     super.dispose();
+  }
+
+  Future<void> _capturePhoto() async {
+    setState(() => _capturingPhoto = true);
+    final store = context.read<AppStore>();
+    final path = await store.capturePhoto(module: 'stock_return', label: 'return_photo');
+    if (!mounted) return;
+    setState(() {
+      _capturingPhoto = false;
+      if (path != null) _photoPath = path;
+    });
+    if (path != null) {
+      _showSnackbar('Photo attached to return', AppTheme.success);
+    }
   }
 
   Future<void> _submitReturn() async {
@@ -1045,6 +1200,7 @@ class _ReturnTabState extends State<_ReturnTab> {
           item: _selectedItem!,
           quantity: quantity,
           reason: _reasonController.text,
+          photoPath: _photoPath,
         );
     if (!mounted) return;
     setState(() => _isSubmitting = false);
@@ -1056,6 +1212,7 @@ class _ReturnTabState extends State<_ReturnTab> {
     setState(() {
       _batchController.clear();
       _selectedItem = null;
+      _photoPath = null;
       _quantityController.clear();
       _reasonController.clear();
     });
@@ -1228,6 +1385,9 @@ class _ReturnTabState extends State<_ReturnTab> {
   }
 
   Widget _buildReturnDetails() {
+    final store = context.watch<AppStore>();
+    final byCategory = store.stockItemsByCategory;
+    final selectedUnit = _selectedItem != null ? store.unitForItem(_selectedItem!) : null;
     return Column(
       children: [
         DropdownButtonFormField<String>(
@@ -1238,10 +1398,15 @@ class _ReturnTabState extends State<_ReturnTab> {
             prefixIcon: Icon(Icons.category_outlined, size: 18),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
-          items: _items.map((item) => DropdownMenuItem(
-            value: item,
-            child: Text(item, style: const TextStyle(fontSize: 13)),
-          )).toList(),
+          items: byCategory.entries.expand((entry) => entry.value.map((item) => DropdownMenuItem(
+                value: item.name,
+                child: Row(
+                  children: [
+                    Expanded(child: Text(item.name, style: const TextStyle(fontSize: 13))),
+                    Text(item.unit, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                  ],
+                ),
+              ))).toList(),
           onChanged: (value) => setState(() => _selectedItem = value),
         ),
         const SizedBox(height: 12),
@@ -1250,6 +1415,7 @@ class _ReturnTabState extends State<_ReturnTab> {
           keyboardType: TextInputType.number,
           decoration: InputDecoration(
             labelText: 'Quantity to Return',
+            suffixText: selectedUnit,
             prefixIcon: Icon(Icons.numbers, size: 18),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
@@ -1264,6 +1430,14 @@ class _ReturnTabState extends State<_ReturnTab> {
             prefixIcon: Icon(Icons.notes_outlined, size: 18),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
+        ),
+        const SizedBox(height: 12),
+        PhotoCaptureCard(
+          label: 'Return condition photo (optional)',
+          hint: 'Tap to capture',
+          imagePath: _photoPath,
+          onTap: _capturingPhoto ? null : _capturePhoto,
+          onClear: _photoPath == null ? null : () => setState(() => _photoPath = null),
         ),
       ],
     );

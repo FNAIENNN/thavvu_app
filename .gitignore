@@ -41,3 +41,8 @@ coverage/
 # Generated
 *.g.dart
 *.freezed.dart
+
+# Local DB secrets
+lib/config/db_secrets.dart
+.env
+*.pem
