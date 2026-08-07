@@ -4,11 +4,11 @@
     "dockerfile": "Dockerfile"
   },
   "user": "ubuntu",
-  "install": "flutter pub get",
+  "install": "export PATH=\"/opt/flutter/bin:$PATH\"\nflutter pub get",
   "terminals": [
     {
       "name": "flutter-web",
-      "command": "flutter run -d web-server --web-port=8080 --web-hostname=0.0.0.0"
+      "command": "export PATH=\"/opt/flutter/bin:$PATH\"\nflutter run -d web-server --web-port=8080 --web-hostname=0.0.0.0"
     }
   ],
   "ports": [
