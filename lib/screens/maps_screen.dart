@@ -18,6 +18,8 @@ class _MapsScreenState extends State<MapsScreen> with TickerProviderStateMixin {
   late Animation<double> _fadeAnimation;
   
   // Map related variables
+  // Controller retained for future camera moves / fit-bounds.
+  // ignore: unused_field
   GoogleMapController? _mapController;
   final Set<Polygon> _polygons = {};
   final Set<Polyline> _polylines = {};
