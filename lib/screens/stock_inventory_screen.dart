@@ -1,29 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/app_models.dart';
+import '../providers/app_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
-
-// ─── Models ───────────────────────────────────────────────────────────────────
-class StockPoint {
-  final String id, name, location, batchId;
-  final int onHand, todayUsage, reorderLevel, totalIn, totalOut;
-  const StockPoint({
-    required this.id, required this.name, required this.location,
-    required this.batchId, required this.onHand, required this.todayUsage,
-    required this.reorderLevel, required this.totalIn, required this.totalOut,
-  });
-  int get remaining => onHand - todayUsage;
-  bool get isLow => remaining <= reorderLevel;
-  double get stockPercentage => (remaining / reorderLevel) * 100;
-}
-
-class StockMovement {
-  final String type, item, batch, date, by;
-  final int quantity;
-  const StockMovement({
-    required this.type, required this.item, required this.quantity,
-    required this.batch, required this.date, required this.by,
-  });
-}
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 class StockInventoryScreen extends StatefulWidget {
@@ -36,23 +16,6 @@ class _StockInventoryScreenState extends State<StockInventoryScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   StockPoint? _selectedPoint;
-  bool _isSubmittingOrder = false;
-  bool _isSubmittingReturn = false;
-
-  static const List<StockPoint> _stockPoints = [
-    StockPoint(id:'SP-001', name:'Site A — North',    location:'North Block',   batchId:'B-042', onHand:450, todayUsage:12, reorderLevel:20, totalIn:750,  totalOut:300),
-    StockPoint(id:'SP-002', name:'Site B — South',    location:'South Block',   batchId:'B-039', onHand:200, todayUsage:8,  reorderLevel:30, totalIn:400,  totalOut:200),
-    StockPoint(id:'SP-003', name:'Warehouse Main',    location:'Central Store', batchId:'B-031', onHand:18,  todayUsage:5,  reorderLevel:20, totalIn:600,  totalOut:582),
-    StockPoint(id:'SP-004', name:'Field Store',       location:'Field Office',  batchId:'B-044', onHand:120, todayUsage:20, reorderLevel:15, totalIn:300,  totalOut:180),
-  ];
-
-  static const List<StockMovement> _movements = [
-    StockMovement(type:'in',       item:'Diesel',         quantity:80,  batch:'B-042', date:'Today 9:10 AM',   by:'HOD Approved'),
-    StockMovement(type:'out',      item:'Diesel',         quantity:12,  batch:'B-042', date:'Today 11:30 AM',  by:'MCH-001'),
-    StockMovement(type:'in',       item:'Engine Oil',     quantity:20,  batch:'B-041', date:'Yesterday',       by:'HOD Approved'),
-    StockMovement(type:'return',   item:'Bolts & Nuts',   quantity:5,   batch:'B-038', date:'12 May',          by:'RET-0089'),
-    StockMovement(type:'transfer', item:'Hydraulic Fluid',quantity:10,  batch:'B-040', date:'11 May',          by:'SP-001→SP-002'),
-  ];
 
   @override
   void initState() { 
@@ -68,6 +31,20 @@ class _StockInventoryScreenState extends State<StockInventoryScreen>
 
   @override
   Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final points = store.stockPoints;
+    final selectedPoint = _selectedPoint != null
+        ? points.firstWhere(
+            (p) => p.id == _selectedPoint!.id,
+            orElse: () => _selectedPoint!,
+          )
+        : null;
+    final movements = selectedPoint == null
+        ? <StockMovement>[]
+        : store.stockMovements
+            .where((m) => m.stockPointId == selectedPoint.id)
+            .toList();
+
     return Scaffold(
       backgroundColor: AppTheme.surface,
       appBar: AppBar(
@@ -95,9 +72,9 @@ class _StockInventoryScreenState extends State<StockInventoryScreen>
         controller: _tabController,
         children: [
           _ViewStockTab(
-            points: _stockPoints, 
-            movements: _movements, 
-            selectedPoint: _selectedPoint,
+            points: points,
+            movements: movements,
+            selectedPoint: selectedPoint,
             onSelect: (point) => setState(() => _selectedPoint = point),
           ),
           const _RaiseOrderTab(),
@@ -140,9 +117,20 @@ class _ViewStockTab extends StatelessWidget {
             const SizedBox(height: 12),
             _buildStatsGrid(),
             const SizedBox(height: 20),
-            _buildMovementHeader(),
+            _buildMovementHeader(context),
             const SizedBox(height: 12),
-            ...movements.map((m) => _MovementTile(movement: m)),
+            if (movements.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: Text(
+                    'No movements recorded for this stock point yet',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                  ),
+                ),
+              )
+            else
+              ...movements.map((m) => _MovementTile(movement: m)),
           ] else ...[
             _buildEmptyState(),
           ],
@@ -321,18 +309,73 @@ class _ViewStockTab extends StatelessWidget {
     );
   }
 
-  Widget _buildMovementHeader() {
+  Widget _buildMovementHeader(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         const Text('Movement Log', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
         TextButton.icon(
-          onPressed: () {},
+          onPressed: () => _showAllMovements(context),
           icon: const Icon(Icons.history, size: 16),
           label: const Text('View All'),
           style: TextButton.styleFrom(foregroundColor: AppTheme.info),
         ),
       ],
+    );
+  }
+
+  void _showAllMovements(BuildContext context) {
+    final allMovements = context.read<AppStore>().stockMovements;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (context, scrollController) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('All Stock Movements', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: allMovements.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'No stock movements recorded yet',
+                              style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                            ),
+                          )
+                        : ListView.builder(
+                            controller: scrollController,
+                            itemCount: allMovements.length,
+                            itemBuilder: (context, index) => _MovementTile(movement: allMovements[index]),
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -523,6 +566,7 @@ class _RaiseOrderTab extends StatefulWidget {
 class _RaiseOrderTabState extends State<_RaiseOrderTab> {
   String? _selectedItem;
   String? _selectedStockPoint;
+  bool _voiceNote = false;
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _purposeController = TextEditingController();
   bool _isSubmitting = false;
@@ -530,12 +574,6 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
   final String _orderId = 'ORD-2024-${(DateTime.now().millisecondsSinceEpoch % 9000 + 1000)}';
   
   static const List<String> _items = ['Diesel', 'Engine Oil', 'Hydraulic Fluid', 'Bolts & Nuts', 'Grease', 'Coolant', 'Air Filter'];
-  static const List<Map<String, String>> _stockPoints = [
-    {'id': 'SP-001', 'name': 'Site A — North'},
-    {'id': 'SP-002', 'name': 'Site B — South'},
-    {'id': 'SP-003', 'name': 'Warehouse Main'},
-    {'id': 'SP-004', 'name': 'Field Store'},
-  ];
 
   @override
   void dispose() {
@@ -544,7 +582,7 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
     super.dispose();
   }
 
-  void _submitOrder() {
+  Future<void> _submitOrder() async {
     if (_selectedStockPoint == null) {
       _showSnackbar('Please select a stock point', AppTheme.danger);
       return;
@@ -557,20 +595,34 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
       _showSnackbar('Please enter quantity', AppTheme.danger);
       return;
     }
+    final quantity = int.tryParse(_quantityController.text);
+    if (quantity == null || quantity <= 0) {
+      _showSnackbar('Please enter a valid quantity', AppTheme.danger);
+      return;
+    }
 
     setState(() => _isSubmitting = true);
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() => _isSubmitting = false);
-      _showSnackbar('Order submitted for HOD approval!', AppTheme.success);
-      _clearForm();
-    });
+    final order = await context.read<AppStore>().raiseStockOrder(
+          stockPointId: _selectedStockPoint!,
+          item: _selectedItem!,
+          quantity: quantity,
+          notes: _purposeController.text,
+          voiceNote: _voiceNote,
+        );
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+    _showSnackbar('Order ${order.id} submitted for HOD approval!', AppTheme.success);
+    _clearForm();
   }
 
   void _clearForm() {
-    _selectedStockPoint = null;
-    _selectedItem = null;
-    _quantityController.clear();
-    _purposeController.clear();
+    setState(() {
+      _selectedStockPoint = null;
+      _selectedItem = null;
+      _voiceNote = false;
+      _quantityController.clear();
+      _purposeController.clear();
+    });
   }
 
   void _showSnackbar(String message, Color color) {
@@ -588,6 +640,8 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
 
   @override
   Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final pendingOrders = store.stockOrders.where((o) => o.status == 'pending').toList();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -601,7 +655,7 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
             step: '1',
             title: 'Destination Stock Point',
             color: AppTheme.warning,
-            child: _buildStockPointSelector(),
+            child: _buildStockPointSelector(store.stockPoints),
           ),
           const SizedBox(height: 16),
           _buildStepCard(
@@ -619,7 +673,57 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
           ),
           const SizedBox(height: 24),
           _buildSubmitButton(),
+          if (pendingOrders.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            _buildPendingOrdersList(pendingOrders),
+          ],
           const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPendingOrdersList(List<StockOrder> pendingOrders) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.border, width: 0.8),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Pending Orders (${pendingOrders.length})', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+          const SizedBox(height: 12),
+          ...pendingOrders.map((order) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: AppTheme.warning.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Icon(Icons.pending_actions_outlined, size: 18, color: AppTheme.warning),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('${order.item} x${order.quantity}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                          Text('${order.id} · ${order.stockPointName}', style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              )),
         ],
       ),
     );
@@ -728,7 +832,7 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
     );
   }
 
-  Widget _buildStockPointSelector() {
+  Widget _buildStockPointSelector(List<StockPoint> stockPoints) {
     return Column(
       children: [
         DropdownButtonFormField<String>(
@@ -739,9 +843,9 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
             prefixIcon: Icon(Icons.warehouse_outlined, size: 18),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
-          items: _stockPoints.map((point) => DropdownMenuItem(
-            value: point['id'],
-            child: Text(point['name']!, style: const TextStyle(fontSize: 13)),
+          items: stockPoints.map((point) => DropdownMenuItem(
+            value: point.id,
+            child: Text(point.name, style: const TextStyle(fontSize: 13)),
           )).toList(),
           onChanged: (value) => setState(() => _selectedStockPoint = value),
         ),
@@ -797,28 +901,37 @@ class _RaiseOrderTabState extends State<_RaiseOrderTab> {
 
   Widget _buildVoiceNoteButton() {
     return GestureDetector(
-      onTap: () => _showSnackbar('Voice recording started', AppTheme.info),
+      onTap: () {
+        setState(() => _voiceNote = !_voiceNote);
+        _showSnackbar(
+          _voiceNote ? 'Voice note attached to order' : 'Voice note removed',
+          AppTheme.info,
+        );
+      },
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: AppTheme.surface,
+          color: _voiceNote ? AppTheme.infoBg : AppTheme.surface,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppTheme.border),
+          border: Border.all(color: _voiceNote ? AppTheme.info : AppTheme.border),
         ),
-        child: const Row(
+        child: Row(
           children: [
-            Icon(Icons.mic_outlined, color: AppTheme.info, size: 20),
-            SizedBox(width: 12),
+            Icon(_voiceNote ? Icons.mic : Icons.mic_outlined, color: AppTheme.info, size: 20),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Voice Note (optional)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: AppTheme.textPrimary)),
-                  Text('Tap to record a voice message', style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                  const Text('Voice Note (optional)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: AppTheme.textPrimary)),
+                  Text(
+                    _voiceNote ? 'Voice note attached' : 'Tap to record a voice message',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                  ),
                 ],
               ),
             ),
-            Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+            Icon(_voiceNote ? Icons.check_circle : Icons.arrow_forward_ios, size: _voiceNote ? 18 : 14, color: _voiceNote ? AppTheme.success : AppTheme.textMuted),
           ],
         ),
       ),
@@ -907,7 +1020,7 @@ class _ReturnTabState extends State<_ReturnTab> {
     super.dispose();
   }
 
-  void _submitReturn() {
+  Future<void> _submitReturn() async {
     if (_batchController.text.isEmpty) {
       _showSnackbar('Please enter original batch ID', AppTheme.danger);
       return;
@@ -920,20 +1033,32 @@ class _ReturnTabState extends State<_ReturnTab> {
       _showSnackbar('Please enter quantity', AppTheme.danger);
       return;
     }
+    final quantity = int.tryParse(_quantityController.text);
+    if (quantity == null || quantity <= 0) {
+      _showSnackbar('Please enter a valid quantity', AppTheme.danger);
+      return;
+    }
 
     setState(() => _isSubmitting = true);
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() => _isSubmitting = false);
-      _showSnackbar('Return submitted for HOD approval!', AppTheme.success);
-      _clearForm();
-    });
+    final ret = await context.read<AppStore>().submitStockReturn(
+          originalBatchId: _batchController.text,
+          item: _selectedItem!,
+          quantity: quantity,
+          reason: _reasonController.text,
+        );
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+    _showSnackbar('Return ${ret.id} submitted for HOD approval!', AppTheme.success);
+    _clearForm();
   }
 
   void _clearForm() {
-    _batchController.clear();
-    _selectedItem = null;
-    _quantityController.clear();
-    _reasonController.clear();
+    setState(() {
+      _batchController.clear();
+      _selectedItem = null;
+      _quantityController.clear();
+      _reasonController.clear();
+    });
   }
 
   void _showSnackbar(String message, Color color) {
